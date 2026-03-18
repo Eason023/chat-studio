@@ -18,6 +18,8 @@ function partToProviderPart(part: MessagePart): ProviderContentPart | null {
   }
 
   if (part.type === "image") {
+    if (!part.url) return null
+
     return {
       type: "image_url",
       image_url: {
@@ -27,6 +29,8 @@ function partToProviderPart(part: MessagePart): ProviderContentPart | null {
   }
 
   if (part.type === "pdf-image") {
+    if (!part.url) return null
+
     return {
       type: "image_url",
       image_url: {

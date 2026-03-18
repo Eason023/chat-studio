@@ -1,5 +1,4 @@
 import type { AttachmentPreview } from "@/lib/types"
-import { readFileAsDataUrl } from "@/lib/file-utils"
 import { pdfFileToImageAttachments } from "@/lib/pdf"
 import { makeId } from "@/lib/utils"
 
@@ -10,21 +9,19 @@ export async function filesToAttachmentPreviews(
 
   for (const file of files) {
     if (file.type.startsWith("image/")) {
-      const url = await readFileAsDataUrl(file)
-
       results.push({
         id: makeId(),
         type: "image",
-        url,
+        blob: file,
+        previewUrl: URL.createObjectURL(file),
         name: file.name,
         mimeType: file.type,
       })
-
       continue
     }
 
     if (file.type === "application/pdf") {
-      const pdfPages = await pdfFileToImageAttachments(file, undefined, 1.2)
+      const pdfPages = await pdfFileToImageAttachments(file)
       results.push(...pdfPages)
     }
   }

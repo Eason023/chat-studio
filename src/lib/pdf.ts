@@ -1,5 +1,5 @@
 import type { AttachmentPreview } from "@/lib/types"
-import { readFileAsArrayBuffer } from "@/lib/file-utils"
+import { canvasToBlob, readFileAsArrayBuffer } from "@/lib/file-utils"
 import { makeId } from "@/lib/utils"
 
 let pdfjsPromise: Promise<any> | null = null
@@ -52,10 +52,14 @@ export async function pdfFileToImageAttachments(
       viewport,
     }).promise
 
+    const blob = await canvasToBlob(canvas, "image/png")
+    const previewUrl = URL.createObjectURL(blob)
+
     results.push({
       id: makeId(),
       type: "pdf-image",
-      url: canvas.toDataURL("image/png"),
+      blob,
+      previewUrl,
       page: pageNumber,
       name: `${file.name} · page ${pageNumber}`,
     })

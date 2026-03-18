@@ -1,11 +1,45 @@
 import { getDB } from "@/lib/db"
-import type { Conversation } from "@/lib/types"
+import { hydrateConversationAttachments } from "@/lib/attachment-store"
+import type { Conversation, MessagePart } from "@/lib/types"
+
+function stripPartUrl(part: MessagePart): MessagePart {
+  if (part.type === "image") {
+    return {
+      type: "image",
+      attachmentId: part.attachmentId,
+      mimeType: part.mimeType,
+      name: part.name,
+    }
+  }
+
+  if (part.type === "pdf-image") {
+    return {
+      type: "pdf-image",
+      attachmentId: part.attachmentId,
+      page: part.page,
+      name: part.name,
+    }
+  }
+
+  return part
+}
+
+function stripConversationUrls(conversation: Conversation): Conversation {
+  return {
+    ...conversation,
+    messages: conversation.messages.map((message) => ({
+      ...message,
+      content: message.content.map(stripPartUrl),
+    })),
+  }
+}
 
 export async function loadAllConversationsFromDB(): Promise<Conversation[]> {
   const db = await getDB()
   const conversations = await db.getAll("conversations")
+  const sorted = conversations.sort((a, b) => b.updatedAt - a.updatedAt)
 
-  return conversations.sort((a, b) => b.updatedAt - a.updatedAt)
+  return Promise.all(sorted.map(hydrateConversationAttachments))
 }
 
 export async function saveAllConversationsToDB(
@@ -25,13 +59,8 @@ export async function saveAllConversationsToDB(
   }
 
   for (const conversation of conversations) {
-    await store.put(conversation)
+    await store.put(stripConversationUrls(conversation))
   }
 
   await tx.done
-}
-
-export async function clearAllConversationsFromDB(): Promise<void> {
-  const db = await getDB()
-  await db.clear("conversations")
 }

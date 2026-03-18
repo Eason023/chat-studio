@@ -28,8 +28,20 @@ export type ChatSettingsSnapshot = {
 
 export type MessagePart =
   | { type: "text"; text: string }
-  | { type: "image"; url: string; mimeType?: string }
-  | { type: "pdf-image"; url: string; page: number }
+  | {
+      type: "image"
+      attachmentId: string
+      url?: string
+      mimeType?: string
+      name?: string
+    }
+  | {
+      type: "pdf-image"
+      attachmentId: string
+      page: number
+      url?: string
+      name?: string
+    }
   | { type: "json-preview"; value: unknown }
 
 export type MessageMeta = {
@@ -66,14 +78,33 @@ export type AttachmentPreview =
   | {
       id: string
       type: "image"
-      url: string
+      blob: Blob
+      previewUrl: string
       name: string
       mimeType?: string
     }
   | {
       id: string
       type: "pdf-image"
-      url: string
+      blob: Blob
+      previewUrl: string
       page: number
       name: string
     }
+
+export type AttachmentRecord =
+  | {
+      id: string
+      type: "image"
+      blob: Blob
+      name: string
+      mimeType?: string
+    }
+  | {
+      id: string
+      type: "pdf-image"
+      blob: Blob
+      page: number
+      name: string
+    }
+    

@@ -4,6 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent } from "react"
 
 import { filesToAttachmentPreviews } from "@/lib/attachments"
+import {
+  getAttachmentDataUrl,
+  getAttachmentPreviewsFromMessage,
+  saveAttachmentPreviewsToDB,
+} from "@/lib/attachment-store"
+import { getMessagePlainText, tryParseStructuredText } from "@/lib/schema-utils"
 import type {
   AttachmentPreview,
   ChatMessage,
@@ -12,7 +18,6 @@ import type {
   MessagePart,
 } from "@/lib/types"
 import { makeId } from "@/lib/utils"
-import { getMessagePlainText, tryParseStructuredText } from "@/lib/schema-utils"
 
 type UseChatSessionArgs = {
   conversation: Conversation | null
@@ -92,47 +97,20 @@ function attachmentToMessagePart(attachment: AttachmentPreview): MessagePart {
   if (attachment.type === "image") {
     return {
       type: "image",
-      url: attachment.url,
+      attachmentId: attachment.id,
+      url: attachment.previewUrl,
       mimeType: attachment.mimeType,
+      name: attachment.name,
     }
   }
 
   return {
     type: "pdf-image",
-    url: attachment.url,
+    attachmentId: attachment.id,
     page: attachment.page,
+    url: attachment.previewUrl,
+    name: attachment.name,
   }
-}
-
-function messagePartsToAttachmentPreviews(
-  message: ChatMessage
-): AttachmentPreview[] {
-  const results: AttachmentPreview[] = []
-
-  for (const part of message.content) {
-    if (part.type === "image") {
-      results.push({
-        id: makeId(),
-        type: "image",
-        url: part.url,
-        name: "Image attachment",
-        mimeType: part.mimeType,
-      })
-      continue
-    }
-
-    if (part.type === "pdf-image") {
-      results.push({
-        id: makeId(),
-        type: "pdf-image",
-        url: part.url,
-        page: part.page,
-        name: `PDF page ${part.page}`,
-      })
-    }
-  }
-
-  return results
 }
 
 function buildUserContent(
@@ -231,6 +209,49 @@ function buildAssistantPlaceholders(
   }))
 }
 
+async function resolveMessagesForProvider(
+  messages: ChatMessage[]
+): Promise<ChatMessage[]> {
+  const resolvedMessages: ChatMessage[] = []
+
+  for (const message of messages) {
+    const resolvedContent: MessagePart[] = []
+
+    for (const part of message.content) {
+      if (part.type === "text" || part.type === "json-preview") {
+        resolvedContent.push(part)
+        continue
+      }
+
+      if (part.type === "image") {
+        const dataUrl = await getAttachmentDataUrl(part.attachmentId)
+
+        resolvedContent.push({
+          ...part,
+          url: dataUrl ?? part.url,
+        })
+        continue
+      }
+
+      if (part.type === "pdf-image") {
+        const dataUrl = await getAttachmentDataUrl(part.attachmentId)
+
+        resolvedContent.push({
+          ...part,
+          url: dataUrl ?? part.url,
+        })
+      }
+    }
+
+    resolvedMessages.push({
+      ...message,
+      content: resolvedContent,
+    })
+  }
+
+  return resolvedMessages
+}
+
 export function useChatSession({
   conversation,
   appendMessage,
@@ -316,6 +337,7 @@ export function useChatSession({
 
     try {
       const nextAttachments = await filesToAttachmentPreviews(files)
+      await saveAttachmentPreviewsToDB(nextAttachments)
       setPendingAttachments((prev) => [...prev, ...nextAttachments])
     } finally {
       setIsProcessingAttachments(false)
@@ -336,7 +358,7 @@ export function useChatSession({
   async function streamAssistantResponse(
     conversationId: string,
     assistantMessageId: string,
-    baseMessages: ChatMessage[],
+    resolvedMessages: ChatMessage[],
     controller: AbortController
   ) {
     if (!conversation) return
@@ -354,7 +376,7 @@ export function useChatSession({
           thinkMode: conversation.settings.thinkMode,
           outputMode: conversation.settings.outputMode,
           jsonSchema: conversation.settings.jsonSchema,
-          messages: baseMessages,
+          messages: resolvedMessages,
         }),
         signal: controller.signal,
       })
@@ -390,6 +412,32 @@ export function useChatSession({
           return
         }
 
+        if (event.type === "done") {
+          if (conversation.settings.outputMode === "json") {
+            updateMessage(conversationId, assistantMessageId, (message) => {
+              const parsed = tryParseStructuredText(getMessagePlainText(message))
+              if (!parsed) return message
+
+              const nonPreviewParts = message.content.filter(
+                (part) => part.type !== "json-preview"
+              )
+
+              return {
+                ...message,
+                content: [
+                  ...nonPreviewParts,
+                  {
+                    type: "json-preview",
+                    value: parsed,
+                  },
+                ],
+              }
+            })
+          }
+
+          return
+        }
+
         if (event.type === "error") {
           updateMessage(conversationId, assistantMessageId, (message) =>
             appendTextToMessage(
@@ -397,32 +445,6 @@ export function useChatSession({
               `\n\n[Streaming error] ${event.error}`
             )
           )
-        }
-
-        if (event.type === "done") {
-          if (conversation.settings.outputMode === "json") {
-              updateMessage(conversationId, assistantMessageId, (message) => {
-              const parsed = tryParseStructuredText(getMessagePlainText(message))
-              if (!parsed) return message
-
-              const nonPreviewParts = message.content.filter(
-                  (part) => part.type !== "json-preview"
-              )
-
-              return {
-                  ...message,
-                  content: [
-                  ...nonPreviewParts,
-                  {
-                      type: "json-preview",
-                      value: parsed,
-                  },
-                  ],
-              }
-              })
-          }
-
-          return
         }
       })
     } catch (error) {
@@ -456,6 +478,8 @@ export function useChatSession({
 
     setConversationMessages(conversationId, [...baseMessages, ...placeholders])
 
+    const resolvedMessages = await resolveMessagesForProvider(baseMessages)
+
     const controllers = placeholders.map(() => new AbortController())
     activeControllersRef.current = controllers
 
@@ -464,7 +488,7 @@ export function useChatSession({
         streamAssistantResponse(
           conversationId,
           placeholder.id,
-          baseMessages,
+          resolvedMessages,
           controllers[index]
         )
       )
@@ -603,7 +627,7 @@ export function useChatSession({
     }
   }
 
-  function beginEditMessage(userMessageId: string) {
+  async function beginEditMessage(userMessageId: string) {
     if (!conversation || isSending) return
 
     const target = conversation.messages.find(
@@ -614,7 +638,8 @@ export function useChatSession({
 
     setEditingMessageId(userMessageId)
     setInput(extractPlainText(target))
-    setPendingAttachments(messagePartsToAttachmentPreviews(target))
+    const restoredAttachments = await getAttachmentPreviewsFromMessage(target)
+    setPendingAttachments(restoredAttachments)
   }
 
   function cancelEditMessage() {
@@ -636,6 +661,7 @@ export function useChatSession({
     isSending,
     canSend,
     sendMessage,
+    stopGeneration,
     handleComposerKeyDown,
     editingMessageId,
     editingMessage,
@@ -646,6 +672,5 @@ export function useChatSession({
     handleFilesSelected,
     removeAttachment,
     isProcessingAttachments,
-    stopGeneration,
   }
 }

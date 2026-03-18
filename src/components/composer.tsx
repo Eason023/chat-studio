@@ -129,7 +129,7 @@ export function Composer({
 
                     <div className="aspect-video overflow-hidden bg-background">
                       <img
-                        src={attachment.url}
+                        src={attachment.previewUrl}
                         alt={attachment.name}
                         className="h-full w-full object-cover"
                       />

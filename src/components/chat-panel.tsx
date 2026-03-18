@@ -67,11 +67,17 @@ function renderMessageParts(message: ChatMessage) {
       return (
         <div key={index} className="space-y-2">
           <div className="text-sm text-muted-foreground">[Image attachment]</div>
-          <img
-            src={part.url}
-            alt="uploaded"
-            className="max-h-80 rounded-xl border"
-          />
+          {part.url ? (
+            <img
+              src={part.url}
+              alt={part.name ?? "uploaded"}
+              className="max-h-80 rounded-xl border"
+            />
+          ) : (
+            <div className="rounded-xl border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+              Image preview unavailable
+            </div>
+          )}
         </div>
       )
     }
@@ -82,11 +88,17 @@ function renderMessageParts(message: ChatMessage) {
           <div className="text-sm text-muted-foreground">
             [PDF page {part.page}]
           </div>
-          <img
-            src={part.url}
-            alt={`PDF page ${part.page}`}
-            className="max-h-80 rounded-xl border"
-          />
+          {part.url ? (
+            <img
+              src={part.url}
+              alt={part.name ?? `PDF page ${part.page}`}
+              className="max-h-80 rounded-xl border"
+            />
+          ) : (
+            <div className="rounded-xl border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+              PDF page preview unavailable
+            </div>
+          )}
         </div>
       )
     }
