@@ -1,12 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
+import { loadAllConversationsFromDB, saveAllConversationsToDB } from "@/lib/conversation-store"
 import {
   loadActiveConversationId,
-  loadConversations,
   saveActiveConversationId,
-  saveConversations,
 } from "@/lib/storage"
 import type {
   ChatMessage,
@@ -48,30 +47,45 @@ export function useConversations() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
 
+  const hasLoadedRef = useRef(false)
+
   useEffect(() => {
-    const stored = loadConversations()
-    const storedActiveId = loadActiveConversationId()
+    let cancelled = false
 
-    if (stored.length > 0) {
-      const hasStoredActive = stored.some((c) => c.id === storedActiveId)
-      const safeActiveId = hasStoredActive
-        ? storedActiveId
-        : stored[0].id
+    async function hydrateFromDB() {
+      const stored = await loadAllConversationsFromDB()
+      const storedActiveId = loadActiveConversationId()
 
-      setConversations(stored)
-      setActiveConversationId(safeActiveId)
-    } else {
-      const initial = createEmptyConversation()
-      setConversations([initial])
-      setActiveConversationId(initial.id)
+      if (cancelled) return
+
+      if (stored.length > 0) {
+        const hasStoredActive = stored.some((c) => c.id === storedActiveId)
+        const safeActiveId = hasStoredActive
+          ? storedActiveId
+          : stored[0].id
+
+        setConversations(stored)
+        setActiveConversationId(safeActiveId)
+      } else {
+        const initial = createEmptyConversation()
+        setConversations([initial])
+        setActiveConversationId(initial.id)
+      }
+
+      hasLoadedRef.current = true
+      setHydrated(true)
     }
 
-    setHydrated(true)
+    void hydrateFromDB()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
-    if (!hydrated) return
-    saveConversations(conversations)
+    if (!hydrated || !hasLoadedRef.current) return
+    void saveAllConversationsToDB(conversations)
   }, [conversations, hydrated])
 
   useEffect(() => {
@@ -83,7 +97,6 @@ export function useConversations() {
     return conversations.find((c) => c.id === activeConversationId) ?? null
   }, [conversations, activeConversationId])
 
-  // 自動修復：如果 activeConversationId 壞掉，就回退到第一個；如果完全沒資料，就補一個新對話
   useEffect(() => {
     if (!hydrated) return
 
