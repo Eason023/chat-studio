@@ -192,6 +192,8 @@ When enabled:
 ## Project Structure
 
 ```text
+public/
+└── pdf.worker.min.mjs
 src/
 ├── app/
 │   ├── api/
@@ -230,9 +232,6 @@ src/
 │   ├── storage.ts
 │   ├── types.ts
 │   └── utils.ts
-│
-├── public/
-│   └── pdf.worker.min.mjs
 │
 └── README.md
 ```
