@@ -43,4 +43,5 @@ next-env.d.ts
 # docker
 Dockerfile
 .dockerignore
-.tar
+*.tar
+*.tar.gz

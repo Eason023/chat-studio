@@ -2,7 +2,7 @@
 
 Chat Studio is a modern multimodal chat workspace built on top of an OpenAI-compatible backend.
 
-It combines real-time streaming chat, compare mode, multimodal input, browser-side conversation memory, and structured extraction workflows in a single interface.
+It combines real-time streaming chat, compare mode, multimodal input, browser-side conversation persistence, and structured extraction workflows in a single interface.
 
 ## Highlights
 
@@ -14,7 +14,7 @@ It combines real-time streaming chat, compare mode, multimodal input, browser-si
 - Compare 2 / Compare 3 responses
 - Regenerate and Edit & Resend
 - Stop generation
-- Browser-based short-term memory
+- Browser-side conversation persistence
 - Image upload
 - PDF upload with page-to-image parsing
 - Markdown rendering
@@ -128,19 +128,21 @@ The request pipeline works as follows:
 
 ### Multimodal Flow
 
-- Images are loaded in the browser and attached to the user message
+- Images are loaded in the browser and stored as local attachment records
 - PDFs are parsed into page images with PDF.js
-- These attachments are forwarded through the existing OpenAI-compatible request format
+- Attachments are resolved into provider-compatible image inputs at request time
 
-### Conversation Memory
+### Conversation Persistence
 
-Short-term memory is stored locally in the browser using `localStorage`.
+Chat history is persisted locally in the browser.
 
-This enables:
+- **IndexedDB** stores conversations, messages, and attachment records
+- **localStorage** stores lightweight UI state such as the active conversation id
 
+This allows:
 - persistent chat history across refreshes
 - multiple local conversations
-- lightweight session management without a database
+- more reliable multimodal persistence than using `localStorage` alone
 
 ### Structured Extraction
 
@@ -179,6 +181,7 @@ When enabled:
 - PDF upload
 - PDF page parsing to image attachments
 - Attachment preview in composer and chat history
+- Browser-side attachment persistence
 
 ### Structured Output
 
@@ -224,7 +227,10 @@ src/
 │   └── use-models.ts
 │
 └── lib/
+    ├── attachment-store.ts
     ├── attachments.ts
+    ├── conversation-store.ts
+    ├── db.ts
     ├── export-utils.ts
     ├── file-utils.ts
     ├── pdf.ts
@@ -255,13 +261,15 @@ src/
 - [react-markdown](https://github.com/remarkjs/react-markdown)
 - [remark-gfm](https://github.com/remarkjs/remark-gfm)
 
-### File Handling
+### File Handling / Persistence
 
 - [react-dropzone](https://react-dropzone.js.org/)
 - [pdfjs-dist / PDF.js](https://github.com/mozilla/pdf.js)
+- [idb](https://github.com/jakearchibald/idb)
 
 ## Notes
 
 - This project is designed for OpenAI-compatible backends
 - Multimodal behavior depends on backend model capability
 - Large PDFs may take longer to parse because each page is converted to an image
+- Attachment persistence is handled locally in the browser
