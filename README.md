@@ -192,6 +192,7 @@ When enabled:
 ## Project Structure
 
 ```text
+README.md
 public/
 └── pdf.worker.min.mjs
 src/
@@ -222,18 +223,16 @@ src/
 │   ├── use-conversations.ts
 │   └── use-models.ts
 │
-├── lib/
-│   ├── attachments.ts
-│   ├── export-utils.ts
-│   ├── file-utils.ts
-│   ├── pdf.ts
-│   ├── provider.ts
-│   ├── schema-utils.ts
-│   ├── storage.ts
-│   ├── types.ts
-│   └── utils.ts
-│
-└── README.md
+└── lib/
+    ├── attachments.ts
+    ├── export-utils.ts
+    ├── file-utils.ts
+    ├── pdf.ts
+    ├── provider.ts
+    ├── schema-utils.ts
+    ├── storage.ts
+    ├── types.ts
+    └── utils.ts
 ```
 
 ## Dependencies
