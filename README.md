@@ -39,7 +39,7 @@ npm install
 Create a `.env.local` file in the project root:
 
 ```env
-OPENAI_COMPAT_BASE_URL=your_api_url (e.g. http://127.0.0.1:8080/)
+OPENAI_COMPAT_BASE_URL=your_api_url (e.g. http://127.0.0.1:8080/v1)
 # Optional if your backend requires auth
 OPENAI_COMPAT_API_KEY=your_api_key
 APP_TITLE=Chat Studio
@@ -56,6 +56,44 @@ Open the app in your browser:
 ```text
 http://localhost:3000
 ```
+
+## Run with Docker
+
+This project includes a multi-stage `Dockerfile` that builds the Next.js standalone output and runs it with Node.js in production mode.
+
+### 1. Build the image
+
+```bash
+docker build -t chat-studio .
+```
+
+### 2. Run the container with an env file
+
+```bash
+docker run --rm -p 3000:3000 --env-file .env.local chat-studio
+```
+
+Open the app in your browser:
+
+```text
+http://localhost:3000
+```
+
+### 3. Or pass environment variables directly
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8080/v1 \
+  -e OPENAI_COMPAT_API_KEY=your_api_key \
+  -e APP_TITLE="Chat Studio" \
+  chat-studio
+```
+
+### Docker Notes
+
+- The container listens on port `3000`.
+- Environment variables are read at runtime, so `DEFAULT_MODEL` and `MODEL_LIST` are not needed.
+- If your OpenAI-compatible backend is running on your host machine, do not use `127.0.0.1` inside the container. Use `host.docker.internal` instead.
 
 ## Usage
 
