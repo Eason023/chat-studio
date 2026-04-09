@@ -128,6 +128,8 @@ export function Composer({
                     </button>
 
                     <div className="aspect-video overflow-hidden bg-background">
+                      {/* Local blob/data URLs are displayed directly and are not suitable for next/image optimization. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={attachment.previewUrl}
                         alt={attachment.name}

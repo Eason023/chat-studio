@@ -2,13 +2,42 @@ import type { AttachmentPreview } from "@/lib/types"
 import { canvasToBlob, readFileAsArrayBuffer } from "@/lib/file-utils"
 import { makeId } from "@/lib/utils"
 
-let pdfjsPromise: Promise<any> | null = null
+type PdfJsViewport = {
+  width: number
+  height: number
+}
+
+type PdfJsPage = {
+  getViewport: (options: { scale: number }) => PdfJsViewport
+  render: (options: {
+    canvasContext: CanvasRenderingContext2D
+    viewport: PdfJsViewport
+  }) => { promise: Promise<void> }
+}
+
+type PdfJsDocument = {
+  numPages: number
+  getPage: (pageNumber: number) => Promise<PdfJsPage>
+}
+
+type PdfJsModule = {
+  GlobalWorkerOptions: {
+    workerSrc: string
+  }
+  getDocument: (options: { data: Uint8Array }) => {
+    promise: Promise<PdfJsDocument>
+  }
+}
+
+let pdfjsPromise: Promise<PdfJsModule> | null = null
 
 async function loadPdfJs() {
   if (!pdfjsPromise) {
     pdfjsPromise = import("pdfjs-dist/build/pdf.mjs").then((pdfjs) => {
-      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
-      return pdfjs
+      const pdfjsModule = pdfjs as PdfJsModule
+
+      pdfjsModule.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
+      return pdfjsModule
     })
   }
 

@@ -2,10 +2,13 @@ import type { Metadata } from "next"
 import "./globals.css"
 
 import { ThemeProvider } from "@/components/theme-provider"
+import { getAppDescription, getAppTitle } from "@/lib/app-config"
 
-export const metadata: Metadata = {
-  title: "Chat Studio",
-  description: "A modern multimodal chat workspace for LLM experiments.",
+export function generateMetadata(): Metadata {
+  return {
+    title: getAppTitle(),
+    description: getAppDescription(),
+  }
 }
 
 export default function RootLayout({

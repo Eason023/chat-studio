@@ -1,5 +1,7 @@
 "use client"
 
+/* eslint-disable @next/next/no-img-element */
+
 import type { KeyboardEvent } from "react"
 import { PencilLine, RotateCcw, Sparkles } from "lucide-react"
 
@@ -20,6 +22,7 @@ import { cn } from "@/lib/utils"
 import { downloadCsvFromObjects, downloadJson } from "@/lib/export-utils"
 
 type ChatPanelProps = {
+  appTitle: string
   conversation: Conversation | null
   input: string
   onInputChange: (value: string) => void
@@ -36,13 +39,6 @@ type ChatPanelProps = {
   onFilesAccepted: (files: File[]) => void
   onRemoveAttachment: (attachmentId: string) => void
   isProcessingAttachments: boolean
-}
-
-function getTextContent(message: ChatMessage) {
-  return message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
 }
 
 function compareGridClass(count: number) {
@@ -119,6 +115,7 @@ function renderMessageParts(message: ChatMessage) {
 }
 
 export function ChatPanel({
+  appTitle,
   conversation,
   input,
   onInputChange,
@@ -143,12 +140,8 @@ export function ChatPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 flex items-center justify-between px-6 py-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold">
-            {conversation?.title ?? "Chat Studio"}
-          </h1>
-          <Badge variant="secondary">
-            {conversation?.settings.model || "No Model"}
-          </Badge>
+          <h1 className="text-lg font-semibold">{conversation?.title ?? appTitle}</h1>
+          <Badge variant="secondary">{conversation?.settings.model || "No Model"}</Badge>
           <Badge variant="outline">
             {conversation?.settings.thinkMode ?? "instant"}
           </Badge>
@@ -355,6 +348,10 @@ export function ChatPanel({
                   Quick Start
                 </div>
                 <p className="text-sm leading-7">
+                  Upload images or PDFs, switch reasoning mode, compare 2 or 3
+                  responses, and use regenerate or edit and resend to iterate.
+                </p>
+                <p className="hidden">
                   現在支援多模態附件、Stop generation、thinking 摺疊、compare 2/3、
                   regenerate 和 edit & resend。
                 </p>

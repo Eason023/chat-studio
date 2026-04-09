@@ -1,7 +1,7 @@
 # Chat Studio
 
 ![Chat Studio Preview](./media/Chat-Studio.png)
-[![License: MIT](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://img.shields.io/badge/License-Apache_2.0-blue.svg) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
 Chat Studio is a modern multimodal chat workspace built on top of an OpenAI-compatible backend.
 
@@ -42,6 +42,7 @@ Create a `.env.local` file in the project root:
 OPENAI_COMPAT_BASE_URL=your_api_url (e.g. http://127.0.0.1:8080/v1)
 # Optional if your backend requires auth
 OPENAI_COMPAT_API_KEY=your_api_key
+# Optional display name
 APP_TITLE=Chat Studio
 ```
 

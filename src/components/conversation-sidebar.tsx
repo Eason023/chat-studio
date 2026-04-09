@@ -9,6 +9,7 @@ import type { Conversation } from "@/lib/types"
 import { cn, formatRelativeTime } from "@/lib/utils"
 
 type ConversationSidebarProps = {
+  appTitle: string
   conversations: Conversation[]
   activeConversationId: string | null
   onCreateConversation: () => void
@@ -17,6 +18,7 @@ type ConversationSidebarProps = {
 }
 
 export function ConversationSidebar({
+  appTitle,
   conversations,
   activeConversationId,
   onCreateConversation,
@@ -27,7 +29,7 @@ export function ConversationSidebar({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-4 py-3">
         <div>
-          <div className="text-sm font-semibold">Chat Studio</div>
+          <div className="text-sm font-semibold">{appTitle}</div>
           <div className="text-xs text-muted-foreground">Conversations</div>
         </div>
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent } from "react"
 
 import { filesToAttachmentPreviews } from "@/lib/attachments"
@@ -21,7 +21,6 @@ import { makeId } from "@/lib/utils"
 
 type UseChatSessionArgs = {
   conversation: Conversation | null
-  appendMessage: (conversationId: string, message: ChatMessage) => void
   updateMessage: (
     conversationId: string,
     messageId: string,
@@ -254,7 +253,6 @@ async function resolveMessagesForProvider(
 
 export function useChatSession({
   conversation,
-  appendMessage,
   updateMessage,
   setConversationMessages,
   updateConversationTitle,
@@ -267,11 +265,11 @@ export function useChatSession({
 
   const activeControllersRef = useRef<AbortController[]>([])
 
-  function clearControllers() {
+  const clearControllers = useCallback(() => {
     activeControllersRef.current = []
-  }
+  }, [])
 
-  function abortAllControllers() {
+  const abortAllControllers = useCallback(() => {
     for (const controller of activeControllersRef.current) {
       try {
         controller.abort()
@@ -280,7 +278,7 @@ export function useChatSession({
       }
     }
     clearControllers()
-  }
+  }, [clearControllers])
 
   useEffect(() => {
     abortAllControllers()
@@ -289,13 +287,13 @@ export function useChatSession({
     setEditingMessageId(null)
     setPendingAttachments([])
     setIsProcessingAttachments(false)
-  }, [conversation?.id])
+  }, [abortAllControllers, conversation?.id])
 
   useEffect(() => {
     return () => {
       abortAllControllers()
     }
-  }, [])
+  }, [abortAllControllers])
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -306,7 +304,7 @@ export function useChatSession({
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload)
     }
-  }, [])
+  }, [abortAllControllers])
 
   const editingMessage = useMemo(() => {
     if (!conversation || !editingMessageId) return null
