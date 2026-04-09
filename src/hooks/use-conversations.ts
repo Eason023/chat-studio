@@ -14,9 +14,9 @@ import type {
 } from "@/lib/types"
 import { makeId } from "@/lib/utils"
 
-function createDefaultSettings(): ChatSettingsSnapshot {
+function createDefaultSettings(defaultModel?: string | null): ChatSettingsSnapshot {
   return {
-    model: "qwen3.5-27b",
+    model: defaultModel?.trim() ?? "",
     systemPrompt: "You are a helpful multimodal assistant.",
     temperature: 0.7,
     thinkMode: "think",
@@ -29,7 +29,7 @@ function createDefaultSettings(): ChatSettingsSnapshot {
   }
 }
 
-function createEmptyConversation(): Conversation {
+function createEmptyConversation(defaultModel?: string | null): Conversation {
   const now = Date.now()
 
   return {
@@ -37,12 +37,30 @@ function createEmptyConversation(): Conversation {
     title: "New Chat",
     createdAt: now,
     updatedAt: now,
-    settings: createDefaultSettings(),
+    settings: createDefaultSettings(defaultModel),
     messages: [],
   }
 }
 
-export function useConversations() {
+function injectDefaultModel(
+  conversation: Conversation,
+  defaultModel?: string | null
+) {
+  if (!defaultModel?.trim() || conversation.settings.model.trim()) {
+    return conversation
+  }
+
+  return {
+    ...conversation,
+    updatedAt: Date.now(),
+    settings: {
+      ...conversation.settings,
+      model: defaultModel,
+    },
+  }
+}
+
+export function useConversations(defaultModel?: string | null) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
@@ -94,27 +112,14 @@ export function useConversations() {
   }, [activeConversationId, hydrated])
 
   const activeConversation = useMemo(() => {
-    return conversations.find((c) => c.id === activeConversationId) ?? null
-  }, [conversations, activeConversationId])
+    const conversation =
+      conversations.find((c) => c.id === activeConversationId) ?? null
 
-  useEffect(() => {
-    if (!hydrated) return
-
-    if (conversations.length === 0) {
-      const fresh = createEmptyConversation()
-      setConversations([fresh])
-      setActiveConversationId(fresh.id)
-      return
-    }
-
-    const stillExists = conversations.some((c) => c.id === activeConversationId)
-    if (!stillExists) {
-      setActiveConversationId(conversations[0].id)
-    }
-  }, [conversations, activeConversationId, hydrated])
+    return conversation ? injectDefaultModel(conversation, defaultModel) : null
+  }, [conversations, activeConversationId, defaultModel])
 
   function createConversation() {
-    const next = createEmptyConversation()
+    const next = createEmptyConversation(defaultModel)
     setConversations((prev) => [next, ...prev])
     setActiveConversationId(next.id)
   }
@@ -124,7 +129,7 @@ export function useConversations() {
       const filtered = prev.filter((c) => c.id !== id)
 
       if (filtered.length === 0) {
-        const fresh = createEmptyConversation()
+        const fresh = createEmptyConversation(defaultModel)
         setActiveConversationId(fresh.id)
         return [fresh]
       }

@@ -147,7 +147,7 @@ export function ChatPanel({
             {conversation?.title ?? "Chat Studio"}
           </h1>
           <Badge variant="secondary">
-            {conversation?.settings.model ?? "No Model"}
+            {conversation?.settings.model || "No Model"}
           </Badge>
           <Badge variant="outline">
             {conversation?.settings.thinkMode ?? "instant"}

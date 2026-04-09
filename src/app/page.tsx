@@ -9,7 +9,7 @@ import { useConversations } from "@/hooks/use-conversations"
 import { useModels } from "@/hooks/use-models"
 
 export default function Home() {
-  const { models } = useModels()
+  const { models, defaultModel } = useModels()
 
   const {
     hydrated,
@@ -24,7 +24,7 @@ export default function Home() {
     appendMessage,
     updateMessage,
     setConversationMessages,
-  } = useConversations()
+  } = useConversations(defaultModel)
 
   const {
     input,

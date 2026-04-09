@@ -7,13 +7,14 @@ export type ModelOption = {
   label: string
 }
 
-const fallbackModels: ModelOption[] = [
-  { id: "qwen3.5-4b", label: "Qwen3.5 4B" },
-  { id: "qwen3.5-27b", label: "Qwen3.5 27B" },
-]
+type ModelsResponse = {
+  defaultModel?: string | null
+  models?: ModelOption[]
+}
 
 export function useModels() {
-  const [models, setModels] = useState<ModelOption[]>(fallbackModels)
+  const [models, setModels] = useState<ModelOption[]>([])
+  const [defaultModel, setDefaultModel] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -27,13 +28,21 @@ export function useModels() {
 
         if (!response.ok) return
 
-        const data = await response.json()
+        const data = (await response.json()) as ModelsResponse
 
-        if (!cancelled && Array.isArray(data.models) && data.models.length > 0) {
-          setModels(data.models)
-        }
+        if (cancelled) return
+
+        setModels(Array.isArray(data.models) ? data.models : [])
+        setDefaultModel(
+          typeof data.defaultModel === "string" && data.defaultModel.trim()
+            ? data.defaultModel
+            : null
+        )
       } catch {
-        // keep fallback models
+        if (!cancelled) {
+          setModels([])
+          setDefaultModel(null)
+        }
       }
     }
 
@@ -44,5 +53,5 @@ export function useModels() {
     }
   }, [])
 
-  return { models }
+  return { models, defaultModel }
 }

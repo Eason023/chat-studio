@@ -321,9 +321,11 @@ export function useChatSession({
   const canSend = useMemo(() => {
     const hasText = input.trim().length > 0
     const hasAttachments = pendingAttachments.length > 0
+    const hasModel = Boolean(conversation?.settings.model.trim())
 
     return Boolean(
       conversation &&
+        hasModel &&
         (hasText || hasAttachments) &&
         !isSending &&
         !isProcessingAttachments
@@ -470,6 +472,8 @@ export function useChatSession({
     compareMode: 1 | 2 | 3,
     model: string
   ) {
+    if (!model.trim()) return
+
     const placeholders = buildAssistantPlaceholders(
       userMessageId,
       model,
@@ -500,6 +504,7 @@ export function useChatSession({
   async function sendMessage() {
     if (!conversation) return
     if (isSending || isProcessingAttachments) return
+    if (!conversation.settings.model.trim()) return
 
     const text = input.trim()
     const conversationId = conversation.id
@@ -598,6 +603,7 @@ export function useChatSession({
 
   async function regenerateFromUserMessage(userMessageId: string) {
     if (!conversation || isSending) return
+    if (!conversation.settings.model.trim()) return
 
     const targetIndex = conversation.messages.findIndex(
       (message) => message.id === userMessageId && message.role === "user"

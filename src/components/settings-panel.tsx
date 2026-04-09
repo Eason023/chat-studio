@@ -44,9 +44,17 @@ export function SettingsPanel({
   }
 
   const resolvedModels = useMemo(() => {
-    return modelOptions.length > 0
+    const currentModel = settings.model.trim()
+
+    if (!currentModel) {
+      return modelOptions
+    }
+
+    const hasCurrentModel = modelOptions.some((model) => model.id === currentModel)
+
+    return hasCurrentModel
       ? modelOptions
-      : [{ id: settings.model, label: settings.model }]
+      : [{ id: currentModel, label: currentModel }, ...modelOptions]
   }, [modelOptions, settings.model])
 
   function enableStructuredMode() {

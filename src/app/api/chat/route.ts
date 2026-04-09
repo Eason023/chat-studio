@@ -13,6 +13,28 @@ type ChatRequestBody = {
   messages: ChatMessage[]
 }
 
+type UpstreamChoice = {
+  delta?: {
+    reasoning_content?: unknown
+    content?: unknown
+  }
+  finish_reason?: unknown
+}
+
+type UpstreamChatChunk = {
+  model?: unknown
+  choices?: UpstreamChoice[]
+  usage?: {
+    prompt_tokens?: unknown
+    completion_tokens?: unknown
+    total_tokens?: unknown
+  }
+  timings?: {
+    prompt_per_second?: unknown
+    predicted_per_second?: unknown
+  }
+}
+
 function makeSseChunk(payload: unknown) {
   return `data: ${JSON.stringify(payload)}\n\n`
 }
@@ -21,9 +43,19 @@ function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError"
 }
 
+function buildAuthHeaders(apiKey?: string) {
+  const headers = new Headers()
+
+  if (apiKey?.trim()) {
+    headers.set("Authorization", `Bearer ${apiKey.trim()}`)
+  }
+
+  return headers
+}
+
 export async function POST(request: Request) {
   const baseUrl = process.env.OPENAI_COMPAT_BASE_URL
-  const apiKey = process.env.OPENAI_COMPAT_API_KEY ?? "sk-demo"
+  const apiKey = process.env.OPENAI_COMPAT_API_KEY
 
   if (!baseUrl) {
     return Response.json(
@@ -57,12 +89,12 @@ export async function POST(request: Request) {
   let upstream: Response
 
   try {
+    const headers = buildAuthHeaders(apiKey)
+    headers.set("Content-Type", "application/json")
+
     upstream = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify(providerPayload),
       signal: request.signal,
     })
@@ -155,15 +187,15 @@ export async function POST(request: Request) {
                 continue
               }
 
-              let json: any
+              let json: UpstreamChatChunk
 
               try {
-                json = JSON.parse(data)
+                json = JSON.parse(data) as UpstreamChatChunk
               } catch {
                 continue
               }
 
-              if (json.model) {
+              if (typeof json.model === "string") {
                 finalMeta.model = json.model
               }
 
@@ -192,19 +224,32 @@ export async function POST(request: Request) {
                 })
               }
 
-              if (choice?.finish_reason) {
+              if (typeof choice?.finish_reason === "string") {
                 finalMeta.finishReason = choice.finish_reason
               }
 
               if (json.usage) {
-                finalMeta.promptTokens = json.usage.prompt_tokens
-                finalMeta.completionTokens = json.usage.completion_tokens
-                finalMeta.totalTokens = json.usage.total_tokens
+                if (typeof json.usage.prompt_tokens === "number") {
+                  finalMeta.promptTokens = json.usage.prompt_tokens
+                }
+
+                if (typeof json.usage.completion_tokens === "number") {
+                  finalMeta.completionTokens = json.usage.completion_tokens
+                }
+
+                if (typeof json.usage.total_tokens === "number") {
+                  finalMeta.totalTokens = json.usage.total_tokens
+                }
               }
 
               if (json.timings) {
-                finalMeta.ppTps = json.timings.prompt_per_second
-                finalMeta.tgTps = json.timings.predicted_per_second
+                if (typeof json.timings.prompt_per_second === "number") {
+                  finalMeta.ppTps = json.timings.prompt_per_second
+                }
+
+                if (typeof json.timings.predicted_per_second === "number") {
+                  finalMeta.tgTps = json.timings.predicted_per_second
+                }
               }
             }
 
