@@ -1,7 +1,7 @@
 # Chat Studio
 
 ![Chat Studio Preview](./media/Chat-Studio.png)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://img.shields.io/badge/License-Apache_2.0-blue.svg) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
 Chat Studio is a modern multimodal chat workspace built on top of an OpenAI-compatible backend.
 
