@@ -19,8 +19,8 @@ function createDefaultSettings(defaultModel?: string | null): ChatSettingsSnapsh
     model: defaultModel?.trim() ?? "",
     systemPrompt: "You are a helpful multimodal assistant.",
     temperature: 0.7,
-    thinkMode: "think",
-    compareMode: 3,
+    thinkMode: "instant",
+    compareMode: 1,
     outputMode: "normal",
     jsonSchema: {
       title: "ResponseSchema",

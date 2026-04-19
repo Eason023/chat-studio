@@ -326,7 +326,7 @@ function OrchestrationPanel({
           <div className="min-w-0 flex-1">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Badge variant="secondary" className="rounded-full">
-                Live orchestration
+                Trace
               </Badge>
               {currentPhase?.modelId ?? process.activeModel ? (
                 <Badge variant="outline" className="rounded-full">
@@ -397,7 +397,7 @@ function AssistantMessageCard({
   const process = message.process
 
   return (
-    <div className="animate-in fade-in-0 slide-in-from-bottom-2 max-w-4xl self-start duration-300">
+    <div className="animate-in fade-in-0 slide-in-from-bottom-2 w-full pr-4 sm:pr-10 lg:pr-16 xl:pr-24 duration-300">
       <Card className="rounded-[1.6rem] border-border/80 shadow-sm">
         <CardContent className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -448,7 +448,7 @@ function UserMessageCard({
   onRegenerate: (messageId: string) => void
 }) {
   return (
-    <div className="animate-in fade-in-0 slide-in-from-bottom-2 max-w-4xl self-end duration-300">
+    <div className="animate-in fade-in-0 slide-in-from-bottom-2 w-full pl-4 sm:pl-10 lg:pl-16 xl:pl-24 duration-300">
       <Card className="rounded-[1.6rem] border-border/80 bg-muted/40 shadow-sm">
         <CardContent className="p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -572,7 +572,7 @@ export function IntelligentModePanel({
           ref={scrollContainerRef}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
         >
-          <div className="mx-auto flex max-w-5xl flex-col gap-3">
+          <div className="mx-auto flex max-w-6xl flex-col gap-4">
             {messages.length === 0 ? (
               <div className="flex min-h-full items-center justify-center py-8">
                 <Card className="max-w-2xl rounded-[1.8rem] border-border/80 shadow-sm">
@@ -627,8 +627,8 @@ export function IntelligentModePanel({
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <div className="mx-auto max-w-5xl">
+        <div className="shrink-0 bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <div className="mx-auto max-w-6xl">
             <Composer
               value={input}
               onChange={setInput}
