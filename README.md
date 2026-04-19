@@ -3,30 +3,27 @@
 ![Chat Studio Preview](./media/Chat-Studio.png)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
-Chat Studio is a modern multimodal chat workspace built on top of an OpenAI-compatible backend.
+Chat Studio is a full-stack multimodal chat workspace built with Next.js on top of OpenAI-compatible backends.
 
-It combines real-time streaming chat, compare mode, multimodal input, browser-side conversation persistence, and structured extraction workflows in a single interface.
+The app now ships with two workflows in one interface:
+
+- `Legacy Custom Mode`: free-form chat, compare mode, structured extraction, and manual model controls.
+- `Intelligent Mode (v2)`: deployer-defined modes, server-side orchestration, session-aware traces, cross-session memory, and optional MCP tool usage.
 
 ## Highlights
 
-- Streaming chat with real-time token rendering
-- Model selection through an OpenAI-compatible provider
-- Custom system prompt
-- Adjustable generation parameters
-- Think / Instant mode
-- Compare 2 / Compare 3 responses
-- Regenerate and Edit & Resend
-- Stop generation
-- Browser-side conversation persistence
-- Image upload
-- PDF upload with page-to-image parsing
-- Markdown rendering
-- Collapsible reasoning display
-- Structured output mode
-- Schema Workspace for extraction tasks
-- Export structured results as JSON / CSV
+- Dual-workspace app with a runtime switch between legacy chat and intelligent modes
+- Streaming chat with image and PDF attachments
+- Markdown, GitHub-flavored tables, and KaTeX math rendering
+- Regenerate and Edit & Resend flows in both legacy and intelligent usage paths
+- Local browser persistence through IndexedDB and `localStorage`
+- Structured output mode with Schema Workspace and JSON / CSV export
+- Intelligent orchestration traces with route, lane, reasoning mode, and phase metrics
+- Session summaries plus editable three-tier cross-session memory in intelligent mode
+- Optional MCP integration with Streamable HTTP and FastMCP-style SSE transports
+- Standalone Docker deployment for production
 
-## Getting Started
+## Quick Start
 
 ### 1. Install dependencies
 
@@ -34,26 +31,28 @@ It combines real-time streaming chat, compare mode, multimodal input, browser-si
 npm install
 ```
 
-### 2. Create environment variables
-
-Create a `.env.local` file in the project root:
+### 2. Create `.env.local`
 
 ```env
-OPENAI_COMPAT_BASE_URL=your_api_url (e.g. http://127.0.0.1:8080/v1)
-# Or use the llama-server root URL instead; the app will derive /v1 automatically
+# One of these backend URLs is required
+OPENAI_COMPAT_BASE_URL=http://127.0.0.1:8080/v1
 LLAMA_SERVER_BASE_URL=http://127.0.0.1:8080
-# Optional if your backend requires auth
+
+# Optional auth for the LLM backend
 LLM_API_KEY=your_api_key
-# Backward-compatible fallback
 OPENAI_COMPAT_API_KEY=your_api_key
-# Optional: auth token for MCP servers that require Bearer authentication
-MCP_SERVER_AUTH_TOKEN=your_mcp_token
-# Optional display name
+
+# Optional UI title
 APP_TITLE=Chat Studio
-# Optional: enable the v2 intelligent mode
+
+# Optional intelligent mode toggle
 INTELLIGENT_MODE=1
-# Optional: defaults to intelligent.config.yaml / .yml / .json in the project root
+
+# Optional intelligent mode config path
 INTELLIGENT_CONFIG_PATH=./intelligent.config.yaml
+
+# Optional auth for MCP servers
+MCP_SERVER_AUTH_TOKEN=your_mcp_token
 ```
 
 ### 3. Start the development server
@@ -62,102 +61,51 @@ INTELLIGENT_CONFIG_PATH=./intelligent.config.yaml
 npm run dev
 ```
 
-By default, `npm run dev` uses `next dev --webpack`. This avoids current Turbopack
-dev-cache issues seen in some Windows / OneDrive paths. If you explicitly want
-Turbopack for local testing, use:
+By default, `npm run dev` uses `next dev --webpack`. This avoids current Turbopack dev-cache issues seen in some Windows / OneDrive paths. If you want Turbopack explicitly, use:
 
 ```bash
 npm run dev:turbopack
 ```
 
-Open the app in your browser:
+Open `http://localhost:3000`.
 
-```text
-http://localhost:3000
-```
+## Environment Variables
 
-## Run with Docker
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `OPENAI_COMPAT_BASE_URL` | Yes, unless `LLAMA_SERVER_BASE_URL` is set | OpenAI-compatible `/v1` endpoint. |
+| `LLAMA_SERVER_BASE_URL` | Yes, unless `OPENAI_COMPAT_BASE_URL` is set | Root llama-server URL. The app derives `/v1` automatically when needed. |
+| `LLM_API_KEY` | No | Preferred auth token for the LLM backend. |
+| `OPENAI_COMPAT_API_KEY` | No | Backward-compatible fallback for `LLM_API_KEY`. |
+| `APP_TITLE` | No | App title shown in the UI. |
+| `INTELLIGENT_MODE` | No | Enables the intelligent workspace when truthy (`1`, `true`, `yes`, `on`, `enabled`). |
+| `INTELLIGENT_CONFIG_PATH` | No | Relative or absolute path to the intelligent config file. Defaults to `intelligent.config.yaml`, `intelligent.config.yml`, or `intelligent.config.json` in the app root. |
+| `MCP_SERVER_AUTH_TOKEN` | No | Optional bearer token sent to the configured MCP server. |
 
-This project includes a multi-stage `Dockerfile` that builds the Next.js standalone output and runs it with Node.js in production mode.
+## Intelligent Mode
 
-### 1. Build the image
-
-```bash
-docker build -t chat-studio .
-```
-
-### 2. Run the container with an env file
-
-```bash
-docker run --rm -p 3000:3000 --env-file .env.local chat-studio
-```
-
-Open the app in your browser:
-
-```text
-http://localhost:3000
-```
-
-### 3. Or pass environment variables directly
-
-```bash
-docker run --rm -p 3000:3000 \
-  -e OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8080/v1 \
-  -e LLM_API_KEY=your_api_key \
-  -e APP_TITLE="Chat Studio" \
-  chat-studio
-```
-
-### Docker Notes
-
-- The container listens on port `3000`.
-- Environment variables are read at runtime, so `DEFAULT_MODEL` and `MODEL_LIST` are not needed.
-- If your OpenAI-compatible backend is running on your host machine, do not use `127.0.0.1` inside the container. Use `host.docker.internal` instead.
-
-## Usage
-
-### Basic Chat
-
-1. Select a model
-2. Enter a prompt
-3. Adjust settings if needed
-4. Send the request
-5. View the streaming result
-
-### Compare Mode
-
-1. Choose `Compare 2` or `Compare 3`
-2. Send one prompt
-3. Review multiple outputs side by side
-
-### Multimodal Chat
-
-1. Drag images or PDFs into the composer
-2. Add optional text instructions
-3. Send the request
-4. Review the generated response
-
-### Structured Extraction
-
-1. Switch `Output Mode` to `Structured`
-2. Open `Schema Workspace`
-3. Define extraction fields
-4. Upload an image or PDF
-5. Send the request
-6. Export the result as JSON or CSV
-
-### Intelligent Mode Config
-
-Phase 1 of v2 adds a server-side intelligent mode config loader and a modes route:
+When `INTELLIGENT_MODE=1` and a config file is present, Chat Studio exposes:
 
 - `GET /api/intelligent/modes`
 - `POST /api/intelligent/chat`
 
-Mode definitions are deployer-defined and are not limited to two fixed mode ids. See:
+The UI adds a top-level workspace selector so you can switch between `Legacy Custom Mode` and any configured intelligent mode.
 
-- `intelligent.config.yaml.example`
+### What v2 currently includes
 
-Example config shape:
+- Deployer-defined intelligent modes loaded from YAML or JSON
+- Per-turn orchestration traces with phase summaries and expandable details
+- Session-aware chat flow with rolling session summaries
+- Editable three-tier memory store:
+  user features, instruction memory, and recent events
+- Optional MCP tool usage from the server-side orchestrator
+- KV / PP / TG metrics when `LLAMA_SERVER_BASE_URL` is explicitly configured
+- Intelligent turn replay through `Edit & Resend` and `Regenerate`
+- Single in-flight intelligent request protection for predictable state updates
+
+### Example config
+
+See [intelligent.config.yaml.example](./intelligent.config.yaml.example).
 
 ```yaml
 version: 1
@@ -167,46 +115,106 @@ mcp_server: https://mcp.server.example
 modes:
   standard:
     label: Intelligent Standard
-    major_model: qwen3.5-27b
+    major_model: Qwen3.5-27b
     models:
-      qwen3.5-27b:
+      Qwen3.5-27b:
         weight: 27
         slots:
           contextual: 0
           stateless: 1
-      qwen3.5-4b: 4
+      Qwen3.5-4b:
+        weight: 4
 
   flash:
     label: Intelligent Flash
-    major_model: qwen3.5-4b
+    major_model: Qwen3.5-4b
     models:
-      qwen3.5-27b: 27
-      qwen3.5-4b:
+      Qwen3.5-27b:
+        weight: 27
+      Qwen3.5-4b:
         weight: 4
         slots:
           contextual: 0
           stateless: 1
 ```
 
-Notes:
+### Intelligent mode notes
 
-- `modes` is an arbitrary object map, so deployers can define any number of modes.
-- `weight` is an app-level routing hint and does not need to equal the real parameter count.
-- `mcp_server` is optional. When present, Intelligent Mode connects to an MCP server, lists tools once per request, and lets step execution use native OpenAI-compatible tool calling when the backend supports it. The orchestrator keeps a schema fallback path for backends with incomplete native tool support.
-- `MCP_SERVER_AUTH_TOKEN` is optional. When set, Chat Studio sends `Authorization: Bearer <token>` to the configured MCP server for both Streamable HTTP and SSE transports.
-- You may set either `OPENAI_COMPAT_BASE_URL` or `LLAMA_SERVER_BASE_URL`. The app derives the missing one automatically.
-- Native llama-server features such as slot pinning and per-phase KV/PP/TG metrics are enabled only when `LLAMA_SERVER_BASE_URL` is explicitly set.
-- `LLM_API_KEY` is the preferred auth variable. `OPENAI_COMPAT_API_KEY` is still accepted as a fallback.
-- Phase 2 currently implements a single-request intelligent chat skeleton:
-  it routes every message through the mode's `major_model`, streams phase status to the UI, and enforces a single in-flight intelligent request.
-- MCP integration supports Streamable HTTP and FastMCP-style SSE transports.
+- `modes` is an arbitrary object map, so you can define any number of intelligent workspaces.
+- `major_model` must also exist inside the mode's `models` map.
+- `weight` is an app-level routing hint and does not need to match the real parameter count.
+- `mcp_server` is optional. When present, the intelligent orchestrator can enumerate and call MCP tools.
+- MCP integration supports both Streamable HTTP and FastMCP-style SSE transports.
+- `MCP_SERVER_AUTH_TOKEN` is optional and is sent as `Authorization: Bearer <token>` when provided.
+- If only `LLAMA_SERVER_BASE_URL` is set, the app derives the OpenAI-compatible `/v1` endpoint automatically.
+- Native llama-server features such as slot pinning and per-phase KV metrics are enabled only when `LLAMA_SERVER_BASE_URL` is explicitly set.
 
-## Security
+## Docker Deployment
 
-- Provider configuration is stored on the server side through `.env.local`
-- API keys are not exposed to the browser
-- `.env.local` should never be committed to version control
-- Available models are discovered dynamically from the resolved OpenAI-compatible `/models` endpoint
+This project uses a multi-stage `Dockerfile` that builds the Next.js standalone output and runs it with Node.js in production mode.
+
+### Build the image
+
+```bash
+docker build -t chat-studio .
+```
+
+### Run legacy mode only
+
+```bash
+docker run --rm -p 3000:3000 --env-file .env.local chat-studio
+```
+
+### Run intelligent mode with an external config file
+
+```bash
+docker run --rm -p 3000:3000 \
+  --env-file .env.production \
+  -e INTELLIGENT_MODE=1 \
+  -e INTELLIGENT_CONFIG_PATH=/app/intelligent.config.yaml \
+  -v /absolute/path/to/intelligent.config.yaml:/app/intelligent.config.yaml:ro \
+  chat-studio
+```
+
+### Run against a backend on the host machine
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8080/v1 \
+  -e LLM_API_KEY=your_api_key \
+  -e APP_TITLE="Chat Studio" \
+  chat-studio
+```
+
+### Docker notes
+
+- The container listens on port `3000`.
+- Environment variables are read at runtime, not at image build time.
+- For intelligent mode, prefer mounting the real config file at runtime instead of baking it into the image.
+- If your backend runs on the Docker host, do not use `127.0.0.1` inside the container. Use `host.docker.internal`.
+- The repo's `.dockerignore` excludes local env files and local intelligent config files so accidental secrets are not copied into the build context.
+
+## Usage Overview
+
+### Legacy Custom Mode
+
+Use the legacy workspace when you want direct manual control over the model and generation settings.
+
+- Select a model
+- Edit the system prompt
+- Switch between `Normal` and `Structured`
+- Use `Compare 2` or `Compare 3`
+- Export structured results as JSON or CSV
+
+### Intelligent Mode
+
+Use the intelligent workspace when you want the server-side orchestrator to manage routing and context.
+
+- Select a configured intelligent mode from the top workspace switcher
+- Send text, images, or PDF pages
+- Inspect the live orchestration trace for each assistant reply
+- Reopen and edit cross-session memory from the sidebar
+- Re-run a previous turn with `Edit & Resend` or `Regenerate`
 
 ## Architecture
 
@@ -214,146 +222,78 @@ Chat Studio is implemented as a full-stack Next.js application.
 
 ### Frontend
 
-The frontend is built with the App Router and a three-panel layout:
+- App Router UI with a legacy workspace and an intelligent workspace
+- Browser-side attachment handling for images and PDFs
+- IndexedDB persistence for conversations and attachments
+- `localStorage` persistence for active workspace selection and active conversation ids
 
-- **Conversation Sidebar** for local chat sessions
-- **Chat Panel** for streaming responses and compare mode
-- **Settings Panel** for model, prompt, generation, and structured output controls
+### Backend
 
-### Backend Proxy
+- `/api/models` discovers models from the configured OpenAI-compatible backend
+- `/api/chat` proxies legacy chat requests
+- `/api/intelligent/modes` exposes deployer-defined intelligent modes
+- `/api/intelligent/chat` runs the intelligent orchestration pipeline
 
-The browser does not call the model provider directly.
+### Intelligent orchestration
 
-Instead, the application uses Next.js Route Handlers as a server-side proxy:
+The intelligent path can:
 
-- `/api/models`
-- `/api/chat`
-
-This keeps provider configuration on the server side and prevents API keys from being exposed to the client.
-
-### Streaming Flow
-
-The request pipeline works as follows:
-
-1. The user sends a prompt from the browser
-2. The frontend sends the request to `/api/chat`
-3. The server forwards the request to an OpenAI-compatible backend
-4. The provider streams partial output back
-5. The frontend renders the response incrementally
-
-### Multimodal Flow
-
-- Images are loaded in the browser and stored as local attachment records
-- PDFs are parsed into page images with PDF.js
-- Attachments are resolved into provider-compatible image inputs at request time
-
-### Conversation Persistence
-
-Chat history is persisted locally in the browser.
-
-- **IndexedDB** stores conversations, messages, and attachment records
-- **localStorage** stores lightweight UI state such as the active conversation id
-
-This allows:
-- persistent chat history across refreshes
-- multiple local conversations
-- more reliable multimodal persistence than using `localStorage` alone
-
-### Structured Extraction
-
-Structured mode is separated from normal chat mode.
-
-When enabled:
-
-1. The user opens the Schema Workspace
-2. A schema is defined through a table-based UI
-3. The schema is attached to the chat request
-4. The model returns structured JSON
-5. The result can be exported as JSON or CSV
-
-## Features
-
-### Chat
-
-- Streaming text generation
-- Markdown rendering
-- Reasoning / thinking collapse
-- Stop generation
-- Regenerate
-- Edit & Resend
-
-### Control
-
-- Model selection
-- System prompt editing
-- Temperature adjustment
-- Think / Instant toggle
-- Compare mode selection
-
-### Multimodal
-
-- Image upload
-- PDF upload
-- PDF page parsing to image attachments
-- Attachment preview in composer and chat history
-- Browser-side attachment persistence
-
-### Structured Output
-
-- Normal / Structured output mode
-- Schema Workspace
-- Table-based schema editing
-- JSON preview
-- JSON export
-- CSV export
+- Analyze the incoming request
+- Route between instant and multi-step behavior
+- Maintain a rolling session summary
+- Update a three-tier global memory bank
+- Call MCP tools when a server is configured
+- Emit structured phase updates back to the UI through SSE
 
 ## Project Structure
 
 ```text
 README.md
+Dockerfile
+intelligent.config.yaml.example
+scripts/
+  dev.mjs
 public/
-└── pdf.worker.min.mjs
+  pdf.worker.min.mjs
 src/
-├── app/
-│   ├── api/
-│   │   ├── chat/
-│   │   │   └── route.ts
-│   │   └── models/
-│   │       └── route.ts
-│   ├── layout.tsx
-│   └── page.tsx
-│
-├── components/
-│   ├── app-shell.tsx
-│   ├── attachment-dropzone.tsx
-│   ├── chat-panel.tsx
-│   ├── composer.tsx
-│   ├── conversation-sidebar.tsx
-│   ├── markdown-renderer.tsx
-│   ├── mode-toggle.tsx
-│   ├── schema-workspace.tsx
-│   ├── settings-panel.tsx
-│   ├── theme-provider.tsx
-│   └── ui/
-│
-├── hooks/
-│   ├── use-chat-session.ts
-│   ├── use-conversations.ts
-│   └── use-models.ts
-│
-└── lib/
-    ├── attachment-store.ts
-    ├── attachments.ts
-    ├── conversation-store.ts
-    ├── db.ts
-    ├── export-utils.ts
-    ├── file-utils.ts
-    ├── pdf.ts
-    ├── provider.ts
-    ├── schema-utils.ts
-    ├── storage.ts
-    ├── types.ts
-    └── utils.ts
+  app/
+    api/
+      chat/route.ts
+      intelligent/
+        chat/route.ts
+        modes/route.ts
+      models/route.ts
+    layout.tsx
+    page.tsx
+  components/
+    home-page-client.tsx
+    legacy-workspace.tsx
+    intelligent-mode-panel.tsx
+    intelligent-memory-sheet.tsx
+    schema-workspace.tsx
+    ui/
+  hooks/
+    use-chat-session.ts
+    use-conversations.ts
+    use-intelligent-chat.ts
+    use-intelligent-modes.ts
+    use-models.ts
+  lib/
+    attachment-store.ts
+    attachments.ts
+    conversation-store.ts
+    db.ts
+    export-utils.ts
+    intelligent-config.ts
+    intelligent-conversation-store.ts
+    intelligent-global-memory-store.ts
+    intelligent-memory.ts
+    mcp-client.ts
+    pdf.ts
+    provider.ts
+    schema-utils.ts
+    storage.ts
+    types.ts
 ```
 
 ## Dependencies
@@ -364,27 +304,30 @@ src/
 - [React](https://react.dev/)
 - [TypeScript](https://www.typescriptlang.org/)
 
-### UI
+### UI and Rendering
 
 - [Tailwind CSS](https://tailwindcss.com/)
 - [shadcn/ui](https://ui.shadcn.com/)
 - [Radix UI](https://www.radix-ui.com/)
 - [lucide-react](https://github.com/lucide-icons/lucide)
-
-### Chat / Rendering
-
 - [react-markdown](https://github.com/remarkjs/react-markdown)
 - [remark-gfm](https://github.com/remarkjs/remark-gfm)
+- [remark-math](https://github.com/remarkjs/remark-math)
+- [rehype-katex](https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex)
 
-### File Handling / Persistence
+### File Handling and Persistence
 
 - [react-dropzone](https://react-dropzone.js.org/)
 - [pdfjs-dist / PDF.js](https://github.com/mozilla/pdf.js)
 - [idb](https://github.com/jakearchibald/idb)
 
-## Notes
+## Security Notes
 
-- This project is designed for OpenAI-compatible backends
-- Multimodal behavior depends on backend model capability
-- Large PDFs may take longer to parse because each page is converted to an image
-- Attachment persistence is handled locally in the browser
+- Provider credentials stay server-side.
+- Browser clients never call the upstream LLM provider directly.
+- Conversations and attachments are stored locally in the browser unless your deployment adds external persistence.
+- Local env files and local intelligent config files should not be committed to version control.
+
+## License
+
+Apache License 2.0. See [LICENSE](./LICENSE).

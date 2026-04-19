@@ -4,5 +4,8 @@ node_modules
 .gitignore
 README.md
 .env
-.env.local
+.env.*
+intelligent.config.yaml
+intelligent.config.yml
+intelligent.config.json
 npm-debug.log
