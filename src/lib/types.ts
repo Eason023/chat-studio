@@ -138,6 +138,7 @@ export type IntelligentModesResponse = {
   backend: {
     hasOpenAiCompatibleBaseUrl: boolean
     hasLlamaServerBaseUrl: boolean
+    isLlamaServerBackend: boolean
     canUseNativeSlotControl: boolean
   }
   modes: IntelligentModeSummary[]
@@ -154,13 +155,28 @@ export type IntelligentConversationMessageStatus =
   | "error"
   | "stopped"
 
+export type IntelligentReasoningMode = "instant" | "think"
+
+export type IntelligentPhaseMetrics = {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  ppTps?: number
+  tgTps?: number
+  cacheTokens?: number
+  cacheHitRate?: number
+}
+
 export type IntelligentTracePhase = {
   id: string
   label: string
   status: IntelligentPhaseStatus
+  summary?: string
   detail?: string
   modelId?: string
   lane?: "contextual" | "stateless"
+  reasoningMode?: IntelligentReasoningMode
+  metrics?: IntelligentPhaseMetrics
   startedAt: number
   updatedAt: number
 }
@@ -194,11 +210,31 @@ export type IntelligentConversation = {
   messages: IntelligentConversationMessage[]
 }
 
+export type IntelligentGlobalMemoryEntry = {
+  id: string
+  key: string
+  value: string
+  updatedAt: number
+}
+
+export type IntelligentGlobalMemoryCategory =
+  | "userFeatures"
+  | "instructionMemory"
+  | "recentEvents"
+
+export type IntelligentGlobalMemory = {
+  userFeatures: IntelligentGlobalMemoryEntry[]
+  instructionMemory: IntelligentGlobalMemoryEntry[]
+  recentEvents: IntelligentGlobalMemoryEntry[]
+  updatedAt: number
+}
+
 export type IntelligentChatRequest = {
   modeId: string
   conversationId?: string
   message: string
   sessionSummary?: string
+  globalMemory?: IntelligentGlobalMemory
   history: IntelligentChatHistoryMessage[]
 }
 
@@ -211,9 +247,12 @@ export type IntelligentChatStreamEvent =
         id: string
         label: string
         status: IntelligentPhaseStatus
+        summary?: string
         detail?: string
         modelId?: string
         lane?: "contextual" | "stateless"
+        reasoningMode?: IntelligentReasoningMode
+        metrics?: IntelligentPhaseMetrics
       }
     }
   | {
@@ -241,4 +280,8 @@ export type IntelligentChatStreamEvent =
         text: string
         updatedAt: number
       }
+    }
+  | {
+      type: "global_memory"
+      memory: IntelligentGlobalMemory
     }

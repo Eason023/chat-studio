@@ -12,6 +12,7 @@ const DISABLED_RESPONSE: IntelligentModesResponse = {
   backend: {
     hasOpenAiCompatibleBaseUrl: false,
     hasLlamaServerBaseUrl: false,
+    isLlamaServerBackend: false,
     canUseNativeSlotControl: false,
   },
   modes: [],

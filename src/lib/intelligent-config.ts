@@ -128,12 +128,13 @@ export function getLlmApiKey() {
 
 export function getIntelligentBackendCapabilities() {
   const openAiBaseUrl = getOpenAiCompatibleBaseUrl()
-  const llamaServerBaseUrl = getLlamaServerBaseUrl()
+  const isLlamaServerBackend = hasExplicitLlamaServerBaseUrl()
 
   return {
     hasOpenAiCompatibleBaseUrl: Boolean(openAiBaseUrl),
-    hasLlamaServerBaseUrl: Boolean(llamaServerBaseUrl),
-    canUseNativeSlotControl: hasExplicitLlamaServerBaseUrl(),
+    hasLlamaServerBaseUrl: isLlamaServerBackend,
+    isLlamaServerBackend,
+    canUseNativeSlotControl: isLlamaServerBackend,
   }
 }
 

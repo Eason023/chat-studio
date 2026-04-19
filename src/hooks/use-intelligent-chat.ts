@@ -5,6 +5,11 @@ import type { KeyboardEvent } from "react"
 
 import { getAttachmentDataUrl, saveAttachmentPreviewsToDB } from "@/lib/attachment-store"
 import { filesToAttachmentPreviews } from "@/lib/attachments"
+import {
+  createEmptyGlobalMemory,
+  loadIntelligentGlobalMemoryFromDB,
+  saveIntelligentGlobalMemoryToDB,
+} from "@/lib/intelligent-global-memory-store"
 import { loadAllIntelligentConversationsFromDB, saveAllIntelligentConversationsToDB } from "@/lib/intelligent-conversation-store"
 import {
   loadActiveIntelligentConversationId,
@@ -19,9 +24,14 @@ import type {
   IntelligentConversation,
   IntelligentConversationMessage,
   IntelligentConversationMessageStatus,
+  IntelligentGlobalMemory,
+  IntelligentGlobalMemoryCategory,
+  IntelligentGlobalMemoryEntry,
   IntelligentMessageProcess,
   IntelligentModeSummary,
+  IntelligentPhaseMetrics,
   IntelligentPhaseStatus,
+  IntelligentReasoningMode,
   IntelligentTracePhase,
   MessagePart,
 } from "@/lib/types"
@@ -51,11 +61,23 @@ function createEmptyConversation(modeId: string): IntelligentConversation {
   }
 }
 
+function createGlobalMemoryEntry(
+  key = "",
+  value = ""
+): IntelligentGlobalMemoryEntry {
+  return {
+    id: makeId(),
+    key,
+    value,
+    updatedAt: Date.now(),
+  }
+}
+
 function deriveConversationTitle(input: string) {
   const compact = input.replace(/\s+/g, " ").trim()
   if (!compact) return "New Session"
 
-  return compact.length > 42 ? `${compact.slice(0, 42)}...` : compact
+  return compact.length > 30 ? `${compact.slice(0, 30)}...` : compact
 }
 
 function deriveAttachmentConversationTitle(attachments: IntelligentAttachmentPart[]) {
@@ -248,9 +270,12 @@ function upsertPhaseInProcess(
     id: string
     label: string
     status: IntelligentPhaseStatus
+    summary?: string
     detail?: string
     modelId?: string
     lane?: "contextual" | "stateless"
+    reasoningMode?: IntelligentReasoningMode
+    metrics?: IntelligentPhaseMetrics
   }
 ): IntelligentMessageProcess {
   const now = Date.now()
@@ -261,9 +286,12 @@ function upsertPhaseInProcess(
       id: phase.id,
       label: phase.label,
       status: phase.status,
+      summary: phase.summary,
       detail: phase.detail,
       modelId: phase.modelId,
       lane: phase.lane,
+      reasoningMode: phase.reasoningMode,
+      metrics: phase.metrics,
       startedAt: now,
       updatedAt: now,
     }
@@ -280,9 +308,13 @@ function upsertPhaseInProcess(
     ...nextPhases[existingIndex],
     label: phase.label,
     status: phase.status,
+    summary: phase.summary ?? nextPhases[existingIndex].summary,
     detail: phase.detail,
     modelId: phase.modelId ?? nextPhases[existingIndex].modelId,
     lane: phase.lane ?? nextPhases[existingIndex].lane,
+    reasoningMode:
+      phase.reasoningMode ?? nextPhases[existingIndex].reasoningMode,
+    metrics: phase.metrics ?? nextPhases[existingIndex].metrics,
     updatedAt: now,
   }
 
@@ -302,6 +334,9 @@ function sortConversations(
 export function useIntelligentChat(mode: IntelligentModeSummary) {
   const [allConversations, setAllConversations] = useState<IntelligentConversation[]>([])
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
+  const [globalMemory, setGlobalMemory] = useState<IntelligentGlobalMemory>(
+    createEmptyGlobalMemory()
+  )
   const [expandedProcessMessageId, setExpandedProcessMessageId] = useState<
     string | null
   >(null)
@@ -318,11 +353,15 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     let cancelled = false
 
     async function hydrateConversations() {
-      const stored = await loadAllIntelligentConversationsFromDB()
+      const [stored, storedGlobalMemory] = await Promise.all([
+        loadAllIntelligentConversationsFromDB(),
+        loadIntelligentGlobalMemoryFromDB(),
+      ])
 
       if (cancelled) return
 
       setAllConversations(sortConversations(stored))
+      setGlobalMemory(storedGlobalMemory)
       setHydrated(true)
     }
 
@@ -337,6 +376,11 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     if (!hydrated) return
     void saveAllIntelligentConversationsToDB(allConversations)
   }, [allConversations, hydrated])
+
+  useEffect(() => {
+    if (!hydrated) return
+    void saveIntelligentGlobalMemoryToDB(globalMemory)
+  }, [globalMemory, hydrated])
 
   const conversations = useMemo(
     () =>
@@ -545,6 +589,53 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     )
   }
 
+  function updateGlobalMemoryCategory(
+    category: IntelligentGlobalMemoryCategory,
+    updater: (
+      entries: IntelligentGlobalMemoryEntry[]
+    ) => IntelligentGlobalMemoryEntry[]
+  ) {
+    setGlobalMemory((current) => ({
+      ...current,
+      [category]: updater(current[category]),
+      updatedAt: Date.now(),
+    }))
+  }
+
+  function addGlobalMemoryEntry(category: IntelligentGlobalMemoryCategory) {
+    updateGlobalMemoryCategory(category, (entries) => [
+      ...entries,
+      createGlobalMemoryEntry(),
+    ])
+  }
+
+  function updateGlobalMemoryEntry(
+    category: IntelligentGlobalMemoryCategory,
+    entryId: string,
+    patch: Partial<Pick<IntelligentGlobalMemoryEntry, "key" | "value">>
+  ) {
+    updateGlobalMemoryCategory(category, (entries) =>
+      entries.map((entry) =>
+        entry.id === entryId
+          ? {
+              ...entry,
+              ...patch,
+              updatedAt: Date.now(),
+            }
+          : entry
+      )
+    )
+  }
+
+  function deleteGlobalMemoryEntry(
+    category: IntelligentGlobalMemoryCategory,
+    entryId: string
+  ) {
+    updateGlobalMemoryCategory(category, (entries) =>
+      entries.filter((entry) => entry.id !== entryId)
+    )
+  }
+
   async function sendMessage() {
     const text = input.trim()
     if ((!text && pendingAttachments.length === 0) || isSending || !activeConversation) {
@@ -607,6 +698,7 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
         conversationId: activeConversation.id,
         message: summarizeMessageContent(text, attachmentsSnapshot),
         sessionSummary: activeConversation.sessionSummary,
+        globalMemory,
         history: requestHistory,
       }
 
@@ -634,9 +726,12 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
                 id: event.phase.id,
                 label: event.phase.label,
                 status: event.phase.status,
+                summary: event.phase.summary,
                 detail: event.phase.detail,
                 modelId: event.phase.modelId,
                 lane: event.phase.lane,
+                reasoningMode: event.phase.reasoningMode,
+                metrics: event.phase.metrics,
               }
             ),
           }))
@@ -678,6 +773,11 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
                 }
               : message.process,
           }))
+          return
+        }
+
+        if (event.type === "global_memory") {
+          setGlobalMemory(event.memory)
           return
         }
 
@@ -738,6 +838,10 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     handleComposerKeyDown,
     expandedProcessMessageId,
     toggleProcessMessage,
+    globalMemory,
+    addGlobalMemoryEntry,
+    updateGlobalMemoryEntry,
+    deleteGlobalMemoryEntry,
     pendingAttachments,
     handleFilesSelected,
     removeAttachment,

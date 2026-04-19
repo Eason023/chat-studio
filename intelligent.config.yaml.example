@@ -5,23 +5,23 @@ mcp_server: https://mcp.server.example
 modes:
   standard:
     label: Intelligent Standard
-    major_model: qwen3.5-27b
+    major_model: Qwen3.5-27b
     models:
-      qwen3.5-27b:
+      Qwen3.5-27b:
         weight: 27
         slots:
           contextual: 0
           stateless: 1
-      qwen3.5-4b:
+      Qwen3.5-4b:
         weight: 4
 
   flash:
     label: Intelligent Flash
-    major_model: qwen3.5-4b
+    major_model: Qwen3.5-4b
     models:
-      qwen3.5-27b:
+      Qwen3.5-27b:
         weight: 27
-      qwen3.5-4b:
+      Qwen3.5-4b:
         weight: 4
         slots:
           contextual: 0
@@ -29,7 +29,7 @@ modes:
 
   coding_specialist:
     label: Coding Specialist
-    major_model: qwen3.5-27b
+    major_model: Qwen3.5-27b
     models:
-      qwen3.5-27b: 27
-      qwen3.5-4b: 6
+      Qwen3.5-27b: 27
+      Qwen3.5-4b: 6
