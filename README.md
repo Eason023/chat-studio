@@ -46,6 +46,8 @@ LLAMA_SERVER_BASE_URL=http://127.0.0.1:8080
 LLM_API_KEY=your_api_key
 # Backward-compatible fallback
 OPENAI_COMPAT_API_KEY=your_api_key
+# Optional: auth token for MCP servers that require Bearer authentication
+MCP_SERVER_AUTH_TOKEN=your_mcp_token
 # Optional display name
 APP_TITLE=Chat Studio
 # Optional: enable the v2 intelligent mode
@@ -190,13 +192,14 @@ Notes:
 
 - `modes` is an arbitrary object map, so deployers can define any number of modes.
 - `weight` is an app-level routing hint and does not need to equal the real parameter count.
-- `mcp_server` is optional. When present, Intelligent Mode connects to a Streamable HTTP MCP server, lists tools once per request, and lets step execution call MCP tools through the server-side orchestrator.
+- `mcp_server` is optional. When present, Intelligent Mode connects to an MCP server, lists tools once per request, and lets step execution use native OpenAI-compatible tool calling when the backend supports it. The orchestrator keeps a schema fallback path for backends with incomplete native tool support.
+- `MCP_SERVER_AUTH_TOKEN` is optional. When set, Chat Studio sends `Authorization: Bearer <token>` to the configured MCP server for both Streamable HTTP and SSE transports.
 - You may set either `OPENAI_COMPAT_BASE_URL` or `LLAMA_SERVER_BASE_URL`. The app derives the missing one automatically.
 - Native llama-server features such as slot pinning and per-phase KV/PP/TG metrics are enabled only when `LLAMA_SERVER_BASE_URL` is explicitly set.
 - `LLM_API_KEY` is the preferred auth variable. `OPENAI_COMPAT_API_KEY` is still accepted as a fallback.
 - Phase 2 currently implements a single-request intelligent chat skeleton:
   it routes every message through the mode's `major_model`, streams phase status to the UI, and enforces a single in-flight intelligent request.
-- MCP integration currently targets the current MCP Streamable HTTP transport. Deprecated HTTP+SSE servers are not wired up in this phase.
+- MCP integration supports Streamable HTTP and FastMCP-style SSE transports.
 
 ## Security
 
