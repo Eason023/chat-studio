@@ -1,3 +1,7 @@
+import {
+  getLlmApiKey,
+  getOpenAiCompatibleBaseUrl,
+} from "@/lib/intelligent-config"
 import { buildJsonSchema, buildProviderMessages } from "@/lib/provider"
 import type { ChatMessage, JsonSchemaDraft, MessageMeta, ThinkMode } from "@/lib/types"
 
@@ -54,12 +58,15 @@ function buildAuthHeaders(apiKey?: string) {
 }
 
 export async function POST(request: Request) {
-  const baseUrl = process.env.OPENAI_COMPAT_BASE_URL
-  const apiKey = process.env.OPENAI_COMPAT_API_KEY
+  const baseUrl = getOpenAiCompatibleBaseUrl()
+  const apiKey = getLlmApiKey()
 
   if (!baseUrl) {
     return Response.json(
-      { error: "Missing OPENAI_COMPAT_BASE_URL in .env.local" },
+      {
+        error:
+          "Missing provider base URL. Set OPENAI_COMPAT_BASE_URL or LLAMA_SERVER_BASE_URL in .env.local.",
+      },
       { status: 500 }
     )
   }

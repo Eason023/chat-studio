@@ -107,4 +107,138 @@ export type AttachmentRecord =
       page: number
       name: string
     }
-    
+
+export type IntelligentAttachmentPart = Extract<
+  MessagePart,
+  { type: "image" | "pdf-image" }
+>
+
+export type IntelligentModelSlots = {
+  contextual?: number
+  stateless?: number
+}
+
+export type IntelligentModeSummary = {
+  id: string
+  label: string
+  majorModel: string
+  models: Array<{
+    id: string
+    weight: number
+    hasSlots: boolean
+    slots?: IntelligentModelSlots
+  }>
+}
+
+export type IntelligentModesResponse = {
+  enabled: boolean
+  defaultModeId: string | null
+  configFile: string | null
+  mcpServerConfigured: boolean
+  backend: {
+    hasOpenAiCompatibleBaseUrl: boolean
+    hasLlamaServerBaseUrl: boolean
+    canUseNativeSlotControl: boolean
+  }
+  modes: IntelligentModeSummary[]
+}
+
+export type IntelligentChatHistoryMessage = {
+  role: "user" | "assistant"
+  content: MessagePart[]
+}
+
+export type IntelligentConversationMessageStatus =
+  | "streaming"
+  | "completed"
+  | "error"
+  | "stopped"
+
+export type IntelligentTracePhase = {
+  id: string
+  label: string
+  status: IntelligentPhaseStatus
+  detail?: string
+  modelId?: string
+  lane?: "contextual" | "stateless"
+  startedAt: number
+  updatedAt: number
+}
+
+export type IntelligentMessageProcess = {
+  route: string | null
+  activeModel: string | null
+  phases: IntelligentTracePhase[]
+  startedAt: number
+  updatedAt: number
+}
+
+export type IntelligentConversationMessage = {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  attachments?: IntelligentAttachmentPart[]
+  createdAt: number
+  status: IntelligentConversationMessageStatus
+  process?: IntelligentMessageProcess
+}
+
+export type IntelligentConversation = {
+  id: string
+  modeId: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  sessionSummary?: string
+  sessionSummaryUpdatedAt?: number
+  messages: IntelligentConversationMessage[]
+}
+
+export type IntelligentChatRequest = {
+  modeId: string
+  conversationId?: string
+  message: string
+  sessionSummary?: string
+  history: IntelligentChatHistoryMessage[]
+}
+
+export type IntelligentPhaseStatus = "active" | "completed" | "error"
+
+export type IntelligentChatStreamEvent =
+  | {
+      type: "phase"
+      phase: {
+        id: string
+        label: string
+        status: IntelligentPhaseStatus
+        detail?: string
+        modelId?: string
+        lane?: "contextual" | "stateless"
+      }
+    }
+  | {
+      type: "token"
+      text: string
+    }
+  | {
+      type: "meta"
+      meta: {
+        modeId: string
+        model: string
+        route: string
+      }
+    }
+  | {
+      type: "done"
+    }
+  | {
+      type: "error"
+      error: string
+    }
+  | {
+      type: "session_summary"
+      summary: {
+        text: string
+        updatedAt: number
+      }
+    }
