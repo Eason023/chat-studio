@@ -25,7 +25,12 @@ type IntelligentMemorySheetProps = {
   onOpenChange: (open: boolean) => void
   memory: IntelligentGlobalMemory
   isSending: boolean
-  onAddEntry: (category: IntelligentGlobalMemoryCategory) => void
+  currentSessionKey: string
+  onAddEntry: (
+    category: IntelligentGlobalMemoryCategory,
+    initialKey?: string,
+    initialValue?: string
+  ) => void
   onUpdateEntry: (
     category: IntelligentGlobalMemoryCategory,
     entryId: string,
@@ -45,37 +50,51 @@ const MEMORY_SECTIONS: Array<{
   {
     category: "userFeatures",
     title: "User Features",
-    description: "Stable facts or long-lived preferences about the user.",
+    description:
+      "Stable, distinctive user facts or strong enduring preferences. Entries are keyed by session hash.",
   },
   {
     category: "instructionMemory",
     title: "Instruction Memory",
-    description: "Reusable guidance the assistant should keep following.",
+    description:
+      "Reusable response instructions or preferences the user strongly values. Entries are keyed by session hash.",
   },
   {
     category: "recentEvents",
     title: "Recent Events",
-    description: "Cross-session context for ongoing work and temporary priorities.",
+    description:
+      "Ongoing projects or temporary priorities that may matter soon. Entries are keyed by session hash.",
   },
 ]
 
 function MemoryEntryEditor({
   entry,
   disabled,
+  currentSessionKey,
   onChange,
   onDelete,
 }: {
   entry: IntelligentGlobalMemoryEntry
   disabled: boolean
+  currentSessionKey: string
   onChange: (patch: Partial<Pick<IntelligentGlobalMemoryEntry, "key" | "value">>) => void
   onDelete: () => void
 }) {
+  const isCurrentSession = entry.key === currentSessionKey
+
   return (
     <div className="rounded-2xl border bg-background px-3 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <Badge variant="outline" className="rounded-full">
-          Memory Entry
-        </Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline" className="rounded-full">
+            Session-Keyed Entry
+          </Badge>
+          {isCurrentSession ? (
+            <Badge variant="secondary" className="rounded-full">
+              Current session, excluded from prefix
+            </Badge>
+          ) : null}
+        </div>
         <Button
           type="button"
           size="icon-sm"
@@ -91,14 +110,14 @@ function MemoryEntryEditor({
         <Input
           value={entry.key}
           disabled={disabled}
-          placeholder="Key"
+          placeholder="Session hash key"
           onChange={(event) => onChange({ key: event.target.value })}
         />
         <Textarea
           value={entry.value}
           disabled={disabled}
-          placeholder="Value"
-          className="min-h-20 resize-y"
+          placeholder="Memory value"
+          className="min-h-24 resize-y"
           onChange={(event) => onChange({ value: event.target.value })}
         />
       </div>
@@ -111,6 +130,7 @@ export function IntelligentMemorySheet({
   onOpenChange,
   memory,
   isSending,
+  currentSessionKey,
   onAddEntry,
   onUpdateEntry,
   onDeleteEntry,
@@ -129,10 +149,10 @@ export function IntelligentMemorySheet({
               <DatabaseZap className="h-4 w-4" />
             </div>
             <div>
-              <SheetTitle>Global Memory</SheetTitle>
+              <SheetTitle>Three-Tier Session Memory</SheetTitle>
               <SheetDescription>
-                Review or edit cross-session memory. Changes are saved locally in this
-                browser.
+                Each tier still uses session-keyed key:value entries. The current
+                session key is excluded from its own prefix.
               </SheetDescription>
             </div>
           </div>
@@ -140,6 +160,9 @@ export function IntelligentMemorySheet({
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <Badge variant="secondary" className="rounded-full">
               {totalEntries} stored {totalEntries === 1 ? "entry" : "entries"}
+            </Badge>
+            <Badge variant="outline" className="rounded-full">
+              Current key {currentSessionKey}
             </Badge>
             <Badge variant="outline" className="rounded-full">
               {isSending ? "Locked during orchestration" : "Editable"}
@@ -170,7 +193,7 @@ export function IntelligentMemorySheet({
                       variant="outline"
                       size="sm"
                       disabled={isSending}
-                      onClick={() => onAddEntry(section.category)}
+                      onClick={() => onAddEntry(section.category, currentSessionKey)}
                     >
                       <Plus className="h-4 w-4" />
                       Add
@@ -184,10 +207,13 @@ export function IntelligentMemorySheet({
                           key={entry.id}
                           entry={entry}
                           disabled={isSending}
+                          currentSessionKey={currentSessionKey}
                           onChange={(patch) =>
                             onUpdateEntry(section.category, entry.id, patch)
                           }
-                          onDelete={() => onDeleteEntry(section.category, entry.id)}
+                          onDelete={() =>
+                            onDeleteEntry(section.category, entry.id)
+                          }
                         />
                       ))}
                     </div>

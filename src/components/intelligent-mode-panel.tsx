@@ -9,6 +9,8 @@ import {
   FileImage,
   FileText,
   LoaderCircle,
+  PencilLine,
+  RotateCcw,
   Route,
   Sparkles,
 } from "lucide-react"
@@ -18,9 +20,11 @@ import { IntelligentConversationSidebar } from "@/components/intelligent-convers
 import { IntelligentMemorySheet } from "@/components/intelligent-memory-sheet"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useIntelligentChat } from "@/hooks/use-intelligent-chat"
+import { getIntelligentSessionMemoryKey } from "@/lib/intelligent-memory"
 import type {
   IntelligentAttachmentPart,
   IntelligentConversationMessage,
@@ -85,10 +89,29 @@ function TypewriterTextInner({
 }
 
 function getCurrentPhase(phases: IntelligentTracePhase[]) {
-  return (
-    [...phases].reverse().find((phase) => phase.status === "active") ??
-    phases[phases.length - 1] ??
-    null
+  const activePhase = [...phases].reverse().find((phase) => phase.status === "active")
+  if (activePhase) {
+    return activePhase
+  }
+
+  const preferredCompletedPhase = [...phases].reverse().find(
+    (phase) =>
+      phase.id !== "session-summary" &&
+      phase.id !== "global-memory" &&
+      phase.id !== "mcp-tools"
+  )
+
+  return preferredCompletedPhase ?? phases[phases.length - 1] ?? null
+}
+
+function getMajorLanePhase(phases: IntelligentTracePhase[]) {
+  return [...phases].reverse().find(
+    (phase) =>
+      phase.lane === "contextual" &&
+      phase.metrics &&
+      phase.id !== "session-summary" &&
+      phase.id !== "global-memory" &&
+      phase.id !== "mcp-tools"
   )
 }
 
@@ -261,7 +284,10 @@ function OrchestrationPanel({
   onToggle: () => void
 }) {
   const currentPhase = getCurrentPhase(process.phases)
-  const metricBadges = getPhaseMetricBadges(currentPhase?.metrics)
+  const majorLanePhase = getMajorLanePhase(process.phases)
+  const metricBadges = getPhaseMetricBadges(
+    majorLanePhase?.metrics ?? currentPhase?.metrics
+  )
   const titleText =
     status === "completed"
       ? "Reasoning complete"
@@ -320,6 +346,11 @@ function OrchestrationPanel({
                   {badge}
                 </Badge>
               ))}
+              {majorLanePhase?.metrics ? (
+                <Badge variant="outline" className="rounded-full">
+                  major lane
+                </Badge>
+              ) : null}
               {process.route ? (
                 <Badge variant="outline" className="rounded-full">
                   <Route className="mr-1 h-3 w-3" />
@@ -408,12 +439,50 @@ function AssistantMessageCard({
   )
 }
 
-function UserMessageCard({ message }: { message: IntelligentConversationMessage }) {
+function UserMessageCard({
+  message,
+  isSending,
+  onEditRequest,
+  onRegenerate,
+}: {
+  message: IntelligentConversationMessage
+  isSending: boolean
+  onEditRequest: (messageId: string) => void
+  onRegenerate: (messageId: string) => void
+}) {
   return (
     <div className="animate-in fade-in-0 slide-in-from-bottom-2 max-w-4xl self-end duration-300">
       <Card className="rounded-[1.6rem] border-border/80 bg-muted/40 shadow-sm">
         <CardContent className="p-4">
-          <div className="mb-2 text-xs font-medium text-muted-foreground">User</div>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-xs font-medium text-muted-foreground">User</div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rounded-full"
+                disabled={isSending}
+                onClick={() => onEditRequest(message.id)}
+              >
+                <PencilLine className="mr-2 h-3.5 w-3.5" />
+                Edit & Resend
+              </Button>
+
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rounded-full"
+                disabled={isSending}
+                onClick={() => onRegenerate(message.id)}
+              >
+                <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                Regenerate
+              </Button>
+            </div>
+          </div>
 
           {message.content ? <MarkdownRenderer content={message.content} /> : null}
           {renderAttachments(message.attachments)}
@@ -437,10 +506,14 @@ export function IntelligentModePanel({
     setInput,
     isSending,
     canSend,
+    isEditing,
     createConversation,
     deleteConversation,
     selectConversation,
     sendMessage,
+    startEditingMessage,
+    cancelEditingMessage,
+    regenerateMessage,
     stopGeneration,
     handleComposerKeyDown,
     expandedProcessMessageId,
@@ -475,6 +548,8 @@ export function IntelligentModePanel({
   if (!hydrated || !activeConversation) {
     return null
   }
+
+  const currentSessionKey = getIntelligentSessionMemoryKey(activeConversation.id)
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[296px_minmax(0,1fr)] bg-background">
@@ -531,7 +606,15 @@ export function IntelligentModePanel({
             ) : (
               messages.map((message) =>
                 message.role === "user" ? (
-                  <UserMessageCard key={message.id} message={message} />
+                  <UserMessageCard
+                    key={message.id}
+                    message={message}
+                    isSending={isSending}
+                    onEditRequest={(messageId) => {
+                      void startEditingMessage(messageId)
+                    }}
+                    onRegenerate={regenerateMessage}
+                  />
                 ) : (
                   <AssistantMessageCard
                     key={message.id}
@@ -555,7 +638,8 @@ export function IntelligentModePanel({
               onKeyDown={handleComposerKeyDown}
               disabled={!canSend}
               isSending={isSending}
-              isEditing={false}
+              isEditing={isEditing}
+              onCancelEdit={cancelEditingMessage}
               attachments={pendingAttachments}
               onFilesAccepted={handleFilesSelected}
               onRemoveAttachment={removeAttachment}
@@ -571,6 +655,7 @@ export function IntelligentModePanel({
         onOpenChange={setMemorySheetOpen}
         memory={globalMemory}
         isSending={isSending}
+        currentSessionKey={currentSessionKey}
         onAddEntry={addGlobalMemoryEntry}
         onUpdateEntry={updateGlobalMemoryEntry}
         onDeleteEntry={deleteGlobalMemoryEntry}

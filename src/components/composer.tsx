@@ -53,11 +53,11 @@ export function Composer({
   showAttachments = true,
 }: ComposerProps) {
   const [dropzoneOpen, setDropzoneOpen] = useState(false)
-  const attachmentsExpanded = dropzoneOpen || attachments.length > 0
+  const attachmentsExpanded = dropzoneOpen
 
   return (
     <div className="mx-auto max-w-5xl rounded-xl border bg-card shadow-sm">
-      <div className="flex max-h-[320px] min-h-[168px] flex-col p-3">
+      <div className="flex min-h-[216px] flex-col p-3">
         {isEditing ? (
           <div className="mb-2 flex shrink-0 items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -78,9 +78,19 @@ export function Composer({
           </div>
         ) : null}
 
+        <div className="min-h-[128px] flex-1 overflow-y-auto">
+          <Textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Type your message... (Enter to send, Shift+Enter for newline)"
+            className="h-full min-h-[128px] resize-none border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0"
+          />
+        </div>
+
         {showAttachments ? (
-          <div className="mb-2 shrink-0">
-            <div className="flex items-center justify-between">
+          <div className="mt-2 shrink-0 border-t pt-2">
+            <div className="flex items-center justify-between gap-3">
               <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                 Attachments
                 {attachments.length > 0 ? ` (${attachments.length})` : ""}
@@ -101,32 +111,34 @@ export function Composer({
                 ) : (
                   <>
                     <ChevronUp className="mr-1 h-4 w-4" />
-                    Expand
+                    Add files
                   </>
                 )}
               </Button>
             </div>
 
             {attachmentsExpanded ? (
-              <AttachmentDropzone
-                onFilesAccepted={onFilesAccepted}
-                disabled={isSending || isProcessingAttachments}
-                isBusy={isProcessingAttachments}
-              />
+              <div className="mt-2">
+                <AttachmentDropzone
+                  onFilesAccepted={onFilesAccepted}
+                  disabled={isSending || isProcessingAttachments}
+                  isBusy={isProcessingAttachments}
+                />
+              </div>
             ) : null}
 
             {attachments.length > 0 ? (
               <div className="mt-2 overflow-x-auto pb-1">
-                <div className="flex min-w-max gap-3">
+                <div className="flex min-w-max gap-2.5">
                   {attachments.map((attachment) => (
                     <div
                       key={attachment.id}
-                      className="group relative w-32 shrink-0 overflow-hidden rounded-lg border bg-muted/30"
+                      className="group relative w-28 shrink-0 overflow-hidden rounded-lg border bg-muted/30"
                     >
                       <button
                         type="button"
                         onClick={() => onRemoveAttachment(attachment.id)}
-                        className="absolute right-2 top-2 z-10 rounded-full border bg-background/90 p-1 opacity-0 shadow-sm transition group-hover:opacity-100"
+                        className="absolute right-1.5 top-1.5 z-10 rounded-full border bg-background/90 p-1 opacity-100 shadow-sm transition group-hover:opacity-100"
                         aria-label="Remove attachment"
                       >
                         <X className="h-3.5 w-3.5" />
@@ -152,7 +164,7 @@ export function Composer({
 
                           <span className="truncate">
                             {attachment.type === "pdf-image"
-                              ? `PDF page ${attachment.page}`
+                              ? `PDF ${attachment.page}`
                               : "Image"}
                           </span>
                         </div>
@@ -166,16 +178,6 @@ export function Composer({
             ) : null}
           </div>
         ) : null}
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <Textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Type your message... (Enter to send, Shift+Enter for newline)"
-            className="h-full min-h-[104px] resize-none border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0"
-          />
-        </div>
 
         <div className="mt-2 shrink-0 border-t pt-2">
           <div className="flex items-center justify-between gap-3">

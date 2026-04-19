@@ -10,6 +10,7 @@ import {
   loadIntelligentGlobalMemoryFromDB,
   saveIntelligentGlobalMemoryToDB,
 } from "@/lib/intelligent-global-memory-store"
+import { getIntelligentSessionMemoryKey } from "@/lib/intelligent-memory"
 import { loadAllIntelligentConversationsFromDB, saveAllIntelligentConversationsToDB } from "@/lib/intelligent-conversation-store"
 import {
   loadActiveIntelligentConversationId,
@@ -340,6 +341,7 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
   const [expandedProcessMessageId, setExpandedProcessMessageId] = useState<
     string | null
   >(null)
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [input, setInput] = useState("")
   const [isSending, setIsSending] = useState(false)
@@ -437,6 +439,7 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     setInput("")
     setPendingAttachments([])
     setIsProcessingAttachments(false)
+    setEditingMessageId(null)
   }, [activeConversation?.id])
 
   useEffect(() => {
@@ -535,6 +538,33 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     )
   }
 
+  async function buildPendingAttachmentPreview(
+    attachment: IntelligentAttachmentPart
+  ): Promise<AttachmentPreview> {
+    const previewUrl =
+      (await getAttachmentDataUrl(attachment.attachmentId)) ?? attachment.url ?? ""
+
+    if (attachment.type === "image") {
+      return {
+        id: attachment.attachmentId,
+        type: "image",
+        blob: new Blob(),
+        previewUrl,
+        name: attachment.name ?? "uploaded image",
+        mimeType: attachment.mimeType,
+      }
+    }
+
+    return {
+      id: attachment.attachmentId,
+      type: "pdf-image",
+      blob: new Blob(),
+      previewUrl,
+      page: attachment.page,
+      name: attachment.name ?? `PDF page ${attachment.page}`,
+    }
+  }
+
   function stopGeneration() {
     const pendingTarget = pendingAssistantRef.current
 
@@ -552,6 +582,34 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     }
 
     setIsSending(false)
+  }
+
+  async function startEditingMessage(messageId: string) {
+    if (isSending || !activeConversation) {
+      return
+    }
+
+    const targetMessage = activeConversation.messages.find(
+      (message) => message.id === messageId && message.role === "user"
+    )
+
+    if (!targetMessage) {
+      return
+    }
+
+    const restoredAttachments = await Promise.all(
+      (targetMessage.attachments ?? []).map(buildPendingAttachmentPreview)
+    )
+
+    setEditingMessageId(messageId)
+    setInput(targetMessage.content)
+    setPendingAttachments(restoredAttachments)
+  }
+
+  function cancelEditingMessage() {
+    setEditingMessageId(null)
+    setInput("")
+    setPendingAttachments([])
   }
 
   function createConversation() {
@@ -602,10 +660,16 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     }))
   }
 
-  function addGlobalMemoryEntry(category: IntelligentGlobalMemoryCategory) {
+  function addGlobalMemoryEntry(
+    category: IntelligentGlobalMemoryCategory,
+    initialKey = activeConversation
+      ? getIntelligentSessionMemoryKey(activeConversation.id)
+      : "",
+    initialValue = ""
+  ) {
     updateGlobalMemoryCategory(category, (entries) => [
       ...entries,
-      createGlobalMemoryEntry(),
+      createGlobalMemoryEntry(initialKey, initialValue),
     ])
   }
 
@@ -636,21 +700,79 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     )
   }
 
-  async function sendMessage() {
-    const text = input.trim()
-    if ((!text && pendingAttachments.length === 0) || isSending || !activeConversation) {
+  async function sendMessage(options?: { regenerateMessageId?: string }) {
+    if (isSending || !activeConversation) {
       return
     }
 
     const timestamp = Date.now()
+    const regenerateMessageId = options?.regenerateMessageId
+    const isRegenerate = Boolean(regenerateMessageId)
+    const text = input.trim()
     const attachmentsSnapshot = pendingAttachments.map(attachmentToMessagePart)
-    const nextUserMessage: IntelligentConversationMessage = {
-      id: makeId(),
-      role: "user",
-      content: text,
-      attachments: attachmentsSnapshot,
-      createdAt: timestamp,
-      status: "completed",
+    const shouldReplay = Boolean(editingMessageId) || isRegenerate
+
+    let requestConversationMessages: IntelligentConversationMessage[] = []
+    let nextConversationMessages: IntelligentConversationMessage[] = []
+    let requestMessageSummary = ""
+    let nextConversationTitle = activeConversation.title
+
+    let nextUserMessage: IntelligentConversationMessage | null = null
+
+    if (isRegenerate) {
+      const targetIndex = activeConversation.messages.findIndex(
+        (message) =>
+          message.id === regenerateMessageId && message.role === "user"
+      )
+
+      if (targetIndex === -1) {
+        return
+      }
+
+      requestConversationMessages = activeConversation.messages.slice(
+        0,
+        targetIndex + 1
+      )
+      nextConversationMessages = [...requestConversationMessages]
+      const targetMessage = requestConversationMessages[targetIndex]
+      requestMessageSummary = summarizeMessageContent(
+        targetMessage?.content ?? "",
+        targetMessage?.attachments ?? []
+      )
+    } else {
+      if (!text && pendingAttachments.length === 0) {
+        return
+      }
+
+      const replayIndex = editingMessageId
+        ? activeConversation.messages.findIndex(
+            (message) => message.id === editingMessageId && message.role === "user"
+          )
+        : -1
+
+      const preservedMessages =
+        replayIndex === -1
+          ? activeConversation.messages
+          : activeConversation.messages.slice(0, replayIndex)
+
+      nextUserMessage = {
+        id: makeId(),
+        role: "user",
+        content: text,
+        attachments: attachmentsSnapshot,
+        createdAt: timestamp,
+        status: "completed",
+      }
+
+      requestConversationMessages = [...preservedMessages, nextUserMessage]
+      nextConversationMessages = [...requestConversationMessages]
+      requestMessageSummary = summarizeMessageContent(text, attachmentsSnapshot)
+
+      if (preservedMessages.length === 0) {
+        nextConversationTitle = text
+          ? deriveConversationTitle(text)
+          : deriveAttachmentConversationTitle(attachmentsSnapshot)
+      }
     }
 
     const nextAssistantMessage: IntelligentConversationMessage = {
@@ -664,17 +786,17 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
 
     updateConversation(activeConversation.id, (conversation) => ({
       ...conversation,
-      title:
-        conversation.messages.length === 0
-          ? text
-            ? deriveConversationTitle(text)
-            : deriveAttachmentConversationTitle(attachmentsSnapshot)
-          : conversation.title,
-      messages: [...conversation.messages, nextUserMessage, nextAssistantMessage],
+      title: nextConversationTitle,
+      sessionSummary: shouldReplay ? "" : conversation.sessionSummary,
+      sessionSummaryUpdatedAt: shouldReplay
+        ? timestamp
+        : conversation.sessionSummaryUpdatedAt,
+      messages: [...nextConversationMessages, nextAssistantMessage],
     }))
 
     setInput("")
     setPendingAttachments([])
+    setEditingMessageId(null)
     setIsSending(true)
 
     const controller = new AbortController()
@@ -688,16 +810,14 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
 
     try {
       const requestHistory = await Promise.all(
-        [...activeConversation.messages, nextUserMessage].map(
-          resolveHistoryMessageForRequest
-        )
+        requestConversationMessages.map(resolveHistoryMessageForRequest)
       )
 
       const requestBody: IntelligentChatRequest = {
         modeId: mode.id,
         conversationId: activeConversation.id,
-        message: summarizeMessageContent(text, attachmentsSnapshot),
-        sessionSummary: activeConversation.sessionSummary,
+        message: requestMessageSummary,
+        sessionSummary: shouldReplay ? "" : activeConversation.sessionSummary,
         globalMemory,
         history: requestHistory,
       }
@@ -820,6 +940,10 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     }
   }
 
+  function regenerateMessage(messageId: string) {
+    void sendMessage({ regenerateMessageId: messageId })
+  }
+
   return {
     hydrated,
     conversations,
@@ -830,10 +954,14 @@ export function useIntelligentChat(mode: IntelligentModeSummary) {
     setInput,
     isSending,
     canSend,
+    isEditing: Boolean(editingMessageId),
     createConversation,
     deleteConversation,
     selectConversation,
     sendMessage,
+    startEditingMessage,
+    cancelEditingMessage,
+    regenerateMessage,
     stopGeneration,
     handleComposerKeyDown,
     expandedProcessMessageId,
