@@ -603,6 +603,11 @@ function summarizeMessagePart(part: MessagePart) {
   return "[Structured JSON preview]"
 }
 
+function formatMessagePartsForPrompt(parts: MessagePart[]) {
+  const blocks = parts.map(summarizeMessagePart).filter(Boolean)
+  return blocks.length > 0 ? blocks.join("\n\n") : "(empty)"
+}
+
 function buildFallbackTurnSessionSummary(
   history: IntelligentChatHistoryMessage[],
   latestUserSummary: string
@@ -2259,7 +2264,6 @@ function buildStepExecutionMessages(args: {
   const historyWindow = getHistoryWindowForDependency(
     args.step.contextDependencyScore
   )
-  const isLowContext = args.step.contextDependencyScore < MEDIUM_CONTEXT_THRESHOLD
   const isHighContext =
     args.step.contextDependencyScore >= HIGH_CONTEXT_THRESHOLD
   const slicedHistory =
@@ -2270,6 +2274,9 @@ function buildStepExecutionMessages(args: {
     args.step.contextDependencyScore >= MEDIUM_CONTEXT_THRESHOLD
       ? toProviderMessages(slicedHistory)
       : []
+  const latestUserContentText = formatMessagePartsForPrompt(
+    args.latestUserContent
+  )
 
   const priorResultsBlock =
     args.previousResults.length > 0
@@ -2305,14 +2312,8 @@ function buildStepExecutionMessages(args: {
         `Current step objective: ${args.step.objective}`,
         `Step difficulty score: ${args.step.difficultyScore}/100`,
         `Step context dependency score: ${args.step.contextDependencyScore}/100`,
-        !isLowContext ? `Latest user request summary: ${args.latestUserSummary}` : "",
-        !isLowContext
-          ? `Latest user content:\n${
-              typeof partsToProviderContent(args.latestUserContent) === "string"
-                ? partsToProviderContent(args.latestUserContent)
-                : "The latest request includes multimodal attachments."
-            }`
-          : "",
+        `Latest user request summary: ${args.latestUserSummary}`,
+        `Latest user content:\n${latestUserContentText}`,
         `Prior completed work:\n${priorResultsBlock}`,
         "Return a concise execution summary with the main findings and what should matter to the final synthesis.",
       ]
