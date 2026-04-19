@@ -25,6 +25,7 @@ import type {
   IntelligentChatRequest,
   IntelligentChatStreamEvent,
   IntelligentGlobalMemory,
+  IntelligentGlobalMemoryCategory,
   IntelligentGlobalMemoryEntry,
   IntelligentPhaseMetrics,
   IntelligentReasoningMode,
@@ -173,6 +174,7 @@ const PLANNER_MAX_TOKENS = 700
 const STEP_MAX_TOKENS = 4096
 const STEP_SUMMARY_MAX_TOKENS = 1200
 const GLOBAL_MEMORY_MAX_TOKENS = 420
+const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 6000
 const MULTI_STEP_THRESHOLD = 58
 const HIGH_CONTEXT_THRESHOLD = 60
 const MEDIUM_CONTEXT_THRESHOLD = 40
@@ -373,6 +375,7 @@ function createGlobalMemoryEntryId() {
 function sanitizeMemoryEntries(
   value: unknown,
   previousEntries: IntelligentGlobalMemoryEntry[] = [],
+  category: IntelligentGlobalMemoryCategory,
   limit: number
 ) {
   if (!Array.isArray(value)) {
@@ -418,7 +421,10 @@ function sanitizeMemoryEntries(
     nextByKey.set(entry.key.toLowerCase(), entry)
   }
 
-  return dedupeIntelligentMemoryEntries(Array.from(nextByKey.values())).slice(
+  return dedupeIntelligentMemoryEntries(
+    Array.from(nextByKey.values()),
+    category
+  ).slice(
     0,
     limit
   )
@@ -443,16 +449,19 @@ function sanitizeGlobalMemory(
     userFeatures: sanitizeMemoryEntries(
       value.userFeatures,
       previous.userFeatures,
+      "userFeatures",
       12
     ),
     instructionMemory: sanitizeMemoryEntries(
       value.instructionMemory,
       previous.instructionMemory,
+      "instructionMemory",
       12
     ),
     recentEvents: sanitizeMemoryEntries(
       value.recentEvents,
       previous.recentEvents,
+      "recentEvents",
       10
     ),
     updatedAt: Date.now(),
@@ -816,7 +825,7 @@ function buildGlobalMemoryResponseFormat() {
       userFeatures: {
         type: "array",
         description:
-          "Only unusually important, stable user facts or enduring preferences the user clearly cares about, represented as session-keyed entries.",
+          "Only unusually important, stable user facts or enduring preferences the user clearly cares about, represented as session-keyed entries. Do not restate facts that are already captured elsewhere in this same tier.",
         items: memoryEntrySchema(
           "One user-features entry keyed by the session hash that established it."
         ),
@@ -824,7 +833,7 @@ function buildGlobalMemoryResponseFormat() {
       instructionMemory: {
         type: "array",
         description:
-          "Only durable response instructions or preferences the user strongly values and would likely want preserved across sessions, represented as session-keyed entries.",
+          "Only durable response instructions or preferences the user strongly values and would likely want preserved across sessions, represented as session-keyed entries. Do not create near-duplicate paraphrases of existing entries.",
         items: memoryEntrySchema(
           "One instruction-memory entry keyed by the session hash that established it."
         ),
@@ -832,7 +841,7 @@ function buildGlobalMemoryResponseFormat() {
       recentEvents: {
         type: "array",
         description:
-          "Ongoing work or temporary priorities, represented as session-keyed entries. Keep this freshest and shortest.",
+          "Ongoing work, active deliverables, blockers, or temporary priorities, represented as session-keyed entries. Keep this freshest and shortest. Never store greetings, timestamps, pleasantries, or trivial turn-by-turn chatter.",
         items: memoryEntrySchema(
           "One recent-events entry keyed by the session hash that established it."
         ),
@@ -1621,11 +1630,15 @@ function createGlobalMemorySystemPrompt(
     "Each tier still uses key:value entries where key is a session hash and value is concise memory text.",
     "Update or replace the entry for the current session key inside the appropriate tiers based on the latest turn.",
     "Preserve unrelated session entries unless they are empty, duplicate, stale, or contradicted.",
+    "Before adding a new memory for the current session, compare against the existing memory bank. If the same underlying fact, preference, or ongoing event is already captured, keep the existing memory instead of restating it under a new session key.",
     "Use userFeatures only for unusual, stable user facts or enduring preferences the user clearly cares about and would likely want remembered later.",
     "Use instructionMemory only for durable response instructions or preferences the user strongly values and repeatedly expects.",
-    "Use recentEvents for ongoing projects, temporary priorities, or active context that may matter soon.",
+    "Use recentEvents only for ongoing projects, temporary priorities, active deliverables, blockers, or near-future context that will likely matter again soon.",
     "Be conservative: most turns should add little or nothing to userFeatures or instructionMemory.",
     "If something is ordinary, weakly implied, one-off, or not clearly important to the user, do not store it in userFeatures or instructionMemory.",
+    "Do not store greetings, pleasantries, current timestamps, 'user said hi', 'user thanked me', or other trivial turn-local chatter in recentEvents.",
+    "Do not store low-signal conversational meta such as the user opening the chat, acknowledging a reply, or making generic small talk.",
+    "If the latest turn adds nothing materially worth remembering, leave the current session absent from that tier instead of forcing an entry.",
     "RecentEvents should stay short and fresh; keep at most 10 items there.",
     "Do not duplicate the same session key multiple times inside one tier.",
     "Keep each memory value concise, dense, and useful for future retrieval. Do not paste the whole conversation.",
@@ -1715,9 +1728,10 @@ async function createChatCompletion(args: {
   const headers = buildAuthHeaders(args.apiKey)
   headers.set("Content-Type", "application/json")
 
-  const response = await fetch(
-    `${args.baseUrl.replace(/\/$/, "")}/chat/completions`,
-    {
+  let response: Response
+
+  try {
+    response = await fetch(`${args.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -1745,8 +1759,10 @@ async function createChatCompletion(args: {
         },
       }),
       signal: args.signal,
-    }
-  )
+    })
+  } catch (error) {
+    throw new Error(formatUpstreamFetchError("completion", error))
+  }
 
   if (!response.ok) {
     const details = await response.text()
@@ -1790,9 +1806,10 @@ async function streamChatCompletion(args: {
   const headers = buildAuthHeaders(args.apiKey)
   headers.set("Content-Type", "application/json")
 
-  const response = await fetch(
-    `${args.baseUrl.replace(/\/$/, "")}/chat/completions`,
-    {
+  let response: Response
+
+  try {
+    response = await fetch(`${args.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -1811,8 +1828,10 @@ async function streamChatCompletion(args: {
         },
       }),
       signal: args.signal,
-    }
-  )
+    })
+  } catch (error) {
+    throw new Error(formatUpstreamFetchError("streaming", error))
+  }
 
   if (!response.ok || !response.body) {
     const details = await response.text()
@@ -2083,6 +2102,38 @@ function truncateContextBlock(text: string, maxLength = 2200) {
   return normalized.length > maxLength
     ? `${normalized.slice(0, maxLength)}...`
     : normalized
+}
+
+function prepareToolResultForConversation(
+  toolName: string,
+  resultText: string,
+  isError: boolean
+) {
+  const normalized =
+    truncateContextBlock(resultText, TOOL_RESULT_CONVERSATION_CHAR_LIMIT) ||
+    "Tool returned no text content."
+
+  if (normalized === resultText.trim()) {
+    return normalized
+  }
+
+  return [
+    normalized,
+    "",
+    `[Tool result truncated for follow-up model calls: ${toolName} (${isError ? "error" : "success"})]`,
+  ].join("\n")
+}
+
+function formatUpstreamFetchError(
+  stage: "completion" | "streaming",
+  error: unknown
+) {
+  if (error instanceof Error) {
+    const detail = error.message || "Unknown network error"
+    return `Upstream ${stage} network error: ${detail}. This can happen if the backend is unreachable, reset the connection, or rejected an oversized prompt after tool results were added.`
+  }
+
+  return `Upstream ${stage} network error. This can happen if the backend is unreachable, reset the connection, or rejected an oversized prompt after tool results were added.`
 }
 
 function getModelEntries(mode: IntelligentModeConfig) {
@@ -2491,7 +2542,11 @@ async function executeInstantWithMcp(args: {
         role: "tool",
         tool_call_id: toolCall.id,
         name: toolCall.function.name,
-        content: toolResultText || "Tool returned no text content.",
+        content: prepareToolResultForConversation(
+          toolCall.function.name,
+          toolResultText,
+          toolResultIsError
+        ),
       })
     }
   }
@@ -2758,7 +2813,11 @@ async function executeNativeToolLoop(args: {
         role: "tool",
         tool_call_id: toolCall.id,
         name: toolCall.function.name,
-        content: toolResultText || "Tool returned no text content.",
+        content: prepareToolResultForConversation(
+          toolCall.function.name,
+          toolResultText,
+          toolResultIsError
+        ),
       })
     }
   }
@@ -2875,6 +2934,7 @@ async function updateGlobalMemory(args: {
               .join("\n\n")}`
           : "Internal step results: instant route; no intermediate steps.",
         "Update the full global memory now. Keep valuable prior entries unless they are stale or contradicted.",
+        "Do not create duplicate paraphrases of facts already stored. Prefer no new memory over weak, obvious, or turn-local memories.",
       ].join("\n\n"),
     },
   ]

@@ -57,8 +57,9 @@ function sanitizeEntries(
 
   return dedupeIntelligentMemoryEntries(
     value
-    .map(sanitizeEntry)
-    .filter((entry): entry is IntelligentGlobalMemoryEntry => Boolean(entry))
+      .map(sanitizeEntry)
+      .filter((entry): entry is IntelligentGlobalMemoryEntry => Boolean(entry)),
+    category
   ).slice(0, CATEGORY_LIMITS[category])
 }
 
