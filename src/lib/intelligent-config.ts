@@ -126,6 +126,11 @@ export function getLlmApiKey() {
   return key ?? undefined
 }
 
+export function getMcpServerAuthToken() {
+  const token = readString(process.env.MCP_SERVER_AUTH_TOKEN)
+  return token ?? undefined
+}
+
 export function getIntelligentBackendCapabilities() {
   const openAiBaseUrl = getOpenAiCompatibleBaseUrl()
   const isLlamaServerBackend = hasExplicitLlamaServerBaseUrl()
