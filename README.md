@@ -40,16 +40,32 @@ Create a `.env.local` file in the project root:
 
 ```env
 OPENAI_COMPAT_BASE_URL=your_api_url (e.g. http://127.0.0.1:8080/v1)
+# Or use the llama-server root URL instead; the app will derive /v1 automatically
+LLAMA_SERVER_BASE_URL=http://127.0.0.1:8080
 # Optional if your backend requires auth
+LLM_API_KEY=your_api_key
+# Backward-compatible fallback
 OPENAI_COMPAT_API_KEY=your_api_key
 # Optional display name
 APP_TITLE=Chat Studio
+# Optional: enable the v2 intelligent mode
+INTELLIGENT_MODE=1
+# Optional: defaults to intelligent.config.yaml / .yml / .json in the project root
+INTELLIGENT_CONFIG_PATH=./intelligent.config.yaml
 ```
 
 ### 3. Start the development server
 
 ```bash
 npm run dev
+```
+
+By default, `npm run dev` uses `next dev --webpack`. This avoids current Turbopack
+dev-cache issues seen in some Windows / OneDrive paths. If you explicitly want
+Turbopack for local testing, use:
+
+```bash
+npm run dev:turbopack
 ```
 
 Open the app in your browser:
@@ -85,7 +101,7 @@ http://localhost:3000
 ```bash
 docker run --rm -p 3000:3000 \
   -e OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8080/v1 \
-  -e OPENAI_COMPAT_API_KEY=your_api_key \
+  -e LLM_API_KEY=your_api_key \
   -e APP_TITLE="Chat Studio" \
   chat-studio
 ```
@@ -128,12 +144,62 @@ docker run --rm -p 3000:3000 \
 5. Send the request
 6. Export the result as JSON or CSV
 
+### Intelligent Mode Config
+
+Phase 1 of v2 adds a server-side intelligent mode config loader and a modes route:
+
+- `GET /api/intelligent/modes`
+- `POST /api/intelligent/chat`
+
+Mode definitions are deployer-defined and are not limited to two fixed mode ids. See:
+
+- `intelligent.config.yaml.example`
+
+Example config shape:
+
+```yaml
+version: 1
+default_mode: standard
+
+modes:
+  standard:
+    label: Intelligent Standard
+    major_model: qwen3.5-27b
+    models:
+      qwen3.5-27b:
+        weight: 27
+        slots:
+          contextual: 0
+          stateless: 1
+      qwen3.5-4b: 4
+
+  flash:
+    label: Intelligent Flash
+    major_model: qwen3.5-4b
+    models:
+      qwen3.5-27b: 27
+      qwen3.5-4b:
+        weight: 4
+        slots:
+          contextual: 0
+          stateless: 1
+```
+
+Notes:
+
+- `modes` is an arbitrary object map, so deployers can define any number of modes.
+- `weight` is an app-level routing hint and does not need to equal the real parameter count.
+- You may set either `OPENAI_COMPAT_BASE_URL` or `LLAMA_SERVER_BASE_URL`. The app derives the missing one automatically.
+- `LLM_API_KEY` is the preferred auth variable. `OPENAI_COMPAT_API_KEY` is still accepted as a fallback.
+- Phase 2 currently implements a single-request intelligent chat skeleton:
+  it routes every message through the mode's `major_model`, streams phase status to the UI, and enforces a single in-flight intelligent request.
+
 ## Security
 
 - Provider configuration is stored on the server side through `.env.local`
 - API keys are not exposed to the browser
 - `.env.local` should never be committed to version control
-- Available models are discovered dynamically from `${OPENAI_COMPAT_BASE_URL}/models`
+- Available models are discovered dynamically from the resolved OpenAI-compatible `/models` endpoint
 
 ## Architecture
 
