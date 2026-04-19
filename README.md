@@ -160,6 +160,7 @@ Example config shape:
 ```yaml
 version: 1
 default_mode: standard
+mcp_server: https://mcp.server.example
 
 modes:
   standard:
@@ -189,10 +190,13 @@ Notes:
 
 - `modes` is an arbitrary object map, so deployers can define any number of modes.
 - `weight` is an app-level routing hint and does not need to equal the real parameter count.
+- `mcp_server` is optional. When present, Intelligent Mode connects to a Streamable HTTP MCP server, lists tools once per request, and lets step execution call MCP tools through the server-side orchestrator.
 - You may set either `OPENAI_COMPAT_BASE_URL` or `LLAMA_SERVER_BASE_URL`. The app derives the missing one automatically.
+- Native llama-server features such as slot pinning and per-phase KV/PP/TG metrics are enabled only when `LLAMA_SERVER_BASE_URL` is explicitly set.
 - `LLM_API_KEY` is the preferred auth variable. `OPENAI_COMPAT_API_KEY` is still accepted as a fallback.
 - Phase 2 currently implements a single-request intelligent chat skeleton:
   it routes every message through the mode's `major_model`, streams phase status to the UI, and enforces a single in-flight intelligent request.
+- MCP integration currently targets the current MCP Streamable HTTP transport. Deprecated HTTP+SSE servers are not wired up in this phase.
 
 ## Security
 
