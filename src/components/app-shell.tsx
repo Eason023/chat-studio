@@ -9,7 +9,7 @@ type AppShellProps = {
 export function AppShell({ sidebar, main, settings }: AppShellProps) {
   return (
     <div className="h-full w-full overflow-hidden bg-background text-foreground">
-      <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_320px]">
+      <div className="grid h-full grid-cols-[296px_minmax(0,1fr)_320px]">
         <aside className="min-h-0 min-w-0 border-r border-border">
           {sidebar}
         </aside>

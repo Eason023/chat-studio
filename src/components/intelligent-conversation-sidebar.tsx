@@ -1,5 +1,6 @@
 "use client"
 
+import type { ReactNode } from "react"
 import {
   BrainCircuit,
   MessageSquareText,
@@ -8,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react"
 
+import { AppBrand } from "@/components/app-brand"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -17,6 +19,7 @@ import { cn, formatRelativeTime } from "@/lib/utils"
 type IntelligentConversationSidebarProps = {
   appTitle: string
   modeLabel: string
+  workspaceSwitcher?: ReactNode
   conversations: IntelligentConversation[]
   activeConversationId: string | null
   globalMemoryCount: number
@@ -42,6 +45,7 @@ function clampConversationTitle(title: string, maxLength = 28) {
 export function IntelligentConversationSidebar({
   appTitle,
   modeLabel,
+  workspaceSwitcher,
   conversations,
   activeConversationId,
   globalMemoryCount,
@@ -55,13 +59,17 @@ export function IntelligentConversationSidebar({
     <div className="flex h-full flex-col bg-background">
       <div className="space-y-3 px-3 py-3">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">{appTitle}</div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <BrainCircuit className="h-3.5 w-3.5" />
-              <span>{modeLabel}</span>
-            </div>
-          </div>
+          <AppBrand
+            title={appTitle}
+            titleClassName="text-base"
+            iconClassName="size-9"
+            subtitle={
+              <span className="flex items-center gap-2">
+                <BrainCircuit className="h-3.5 w-3.5" />
+                <span>{modeLabel}</span>
+              </span>
+            }
+          />
 
           <div className="flex items-center gap-1.5">
             <Button
@@ -83,6 +91,12 @@ export function IntelligentConversationSidebar({
             </Button>
           </div>
         </div>
+
+        {workspaceSwitcher ? (
+          <div className="rounded-xl border bg-muted/20 px-3 py-3">
+            {workspaceSwitcher}
+          </div>
+        ) : null}
 
         <div className="rounded-xl border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
           Session history stays local in this browser. Cross-session memory currently

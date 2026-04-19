@@ -1,5 +1,7 @@
 "use client"
 
+import type { ReactNode } from "react"
+
 import { AppShell } from "@/components/app-shell"
 import { ChatPanel } from "@/components/chat-panel"
 import { ConversationSidebar } from "@/components/conversation-sidebar"
@@ -10,9 +12,13 @@ import { useModels } from "@/hooks/use-models"
 
 type LegacyWorkspaceProps = {
   appTitle: string
+  workspaceSwitcher?: ReactNode
 }
 
-export function LegacyWorkspace({ appTitle }: LegacyWorkspaceProps) {
+export function LegacyWorkspace({
+  appTitle,
+  workspaceSwitcher,
+}: LegacyWorkspaceProps) {
   const { models, defaultModel } = useModels()
 
   const {
@@ -69,6 +75,7 @@ export function LegacyWorkspace({ appTitle }: LegacyWorkspaceProps) {
       sidebar={
         <ConversationSidebar
           appTitle={appTitle}
+          workspaceSwitcher={workspaceSwitcher}
           conversations={conversations}
           activeConversationId={activeConversationId}
           onCreateConversation={createConversation}

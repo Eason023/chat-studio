@@ -9,6 +9,10 @@ export function generateMetadata(): Metadata {
   return {
     title: getAppTitle(),
     description: getAppDescription(),
+    icons: {
+      icon: [{ url: "/favicon.ico", type: "image/x-icon" }],
+      shortcut: "/favicon.ico",
+    },
   }
 }
 

@@ -1,7 +1,9 @@
 "use client"
 
+import type { ReactNode } from "react"
 import { MessageSquare, Plus, Trash2 } from "lucide-react"
 
+import { AppBrand } from "@/components/app-brand"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -10,6 +12,7 @@ import { cn, formatRelativeTime } from "@/lib/utils"
 
 type ConversationSidebarProps = {
   appTitle: string
+  workspaceSwitcher?: ReactNode
   conversations: Conversation[]
   activeConversationId: string | null
   onCreateConversation: () => void
@@ -19,6 +22,7 @@ type ConversationSidebarProps = {
 
 export function ConversationSidebar({
   appTitle,
+  workspaceSwitcher,
   conversations,
   activeConversationId,
   onCreateConversation,
@@ -27,20 +31,30 @@ export function ConversationSidebar({
 }: ConversationSidebarProps) {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-3 py-2.5">
-        <div>
-          <div className="text-sm font-semibold">{appTitle}</div>
-          <div className="text-xs text-muted-foreground">Conversations</div>
+      <div className="space-y-3 px-3 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <AppBrand
+            title={appTitle}
+            subtitle="Conversations"
+            titleClassName="text-base"
+            iconClassName="size-9"
+          />
+
+          <Button
+            size="icon-sm"
+            variant="outline"
+            aria-label="New chat"
+            onClick={onCreateConversation}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
 
-        <Button
-          size="icon-sm"
-          variant="outline"
-          aria-label="New chat"
-          onClick={onCreateConversation}
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
+        {workspaceSwitcher ? (
+          <div className="rounded-xl border bg-muted/20 px-3 py-3">
+            {workspaceSwitcher}
+          </div>
+        ) : null}
       </div>
 
       <Separator />

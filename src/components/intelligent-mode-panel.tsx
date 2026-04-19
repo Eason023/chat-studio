@@ -2,6 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
+import type { ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import {
   ChevronDown,
@@ -37,6 +38,7 @@ import type {
 type IntelligentModePanelProps = {
   appTitle: string
   mode: IntelligentModeSummary
+  workspaceSwitcher?: ReactNode
 }
 
 function TypewriterText({
@@ -346,11 +348,6 @@ function OrchestrationPanel({
                   {badge}
                 </Badge>
               ))}
-              {majorLanePhase?.metrics ? (
-                <Badge variant="outline" className="rounded-full">
-                  major lane
-                </Badge>
-              ) : null}
               {process.route ? (
                 <Badge variant="outline" className="rounded-full">
                   <Route className="mr-1 h-3 w-3" />
@@ -495,6 +492,7 @@ function UserMessageCard({
 export function IntelligentModePanel({
   appTitle,
   mode,
+  workspaceSwitcher,
 }: IntelligentModePanelProps) {
   const {
     hydrated,
@@ -557,6 +555,7 @@ export function IntelligentModePanel({
         <IntelligentConversationSidebar
           appTitle={appTitle}
           modeLabel={mode.label}
+          workspaceSwitcher={workspaceSwitcher}
           conversations={conversations}
           activeConversationId={activeConversationId}
           globalMemoryCount={globalMemoryCount}

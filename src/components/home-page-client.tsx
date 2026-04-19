@@ -4,8 +4,7 @@ import { useMemo, useSyncExternalStore } from "react"
 
 import { IntelligentModePanel } from "@/components/intelligent-mode-panel"
 import { LegacyWorkspace } from "@/components/legacy-workspace"
-import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { WorkspaceSwitcher } from "@/components/workspace-switcher"
 import { useIntelligentModes } from "@/hooks/use-intelligent-modes"
 import {
   loadWorkspaceMode,
@@ -24,6 +23,16 @@ export function HomePageClient({ appTitle }: HomePageClientProps) {
 
   const intelligentModeOptions = data.modes
   const hasIntelligentModes = data.enabled && intelligentModeOptions.length > 0
+  const workspaceOptions = useMemo(
+    () => [
+      { id: LEGACY_WORKSPACE_ID, label: "Legacy Custom Mode" },
+      ...intelligentModeOptions.map((mode) => ({
+        id: mode.id,
+        label: mode.label,
+      })),
+    ],
+    [intelligentModeOptions]
+  )
 
   const availableWorkspaceIds = useMemo(
     () => [LEGACY_WORKSPACE_ID, ...intelligentModeOptions.map((mode) => mode.id)],
@@ -68,50 +77,30 @@ export function HomePageClient({ appTitle }: HomePageClientProps) {
     )
   }
 
+  const workspaceSwitcher = (
+    <WorkspaceSwitcher
+      value={resolvedWorkspaceId}
+      options={workspaceOptions}
+      isLoading={isLoading}
+      error={error}
+      onValueChange={saveWorkspaceMode}
+    />
+  )
+
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
-      <div className="shrink-0 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">{appTitle}</div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            {isLoading ? <Badge variant="outline">Loading modes...</Badge> : null}
-            {error ? <Badge variant="destructive">Modes unavailable</Badge> : null}
-
-            <Select
-              value={resolvedWorkspaceId}
-              onValueChange={saveWorkspaceMode}
-            >
-              <SelectTrigger className="min-w-56">
-                <SelectValue placeholder="Select workspace mode" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={LEGACY_WORKSPACE_ID}>
-                  Legacy Custom Mode
-                </SelectItem>
-                {intelligentModeOptions.map((mode) => (
-                  <SelectItem key={mode.id} value={mode.id}>
-                    {mode.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1">
-        {selectedIntelligentMode ? (
-          <IntelligentModePanel
-            appTitle={appTitle}
-            mode={selectedIntelligentMode}
-          />
-        ) : (
-          <LegacyWorkspace appTitle={appTitle} />
-        )}
-      </div>
+    <div className="h-screen bg-background text-foreground">
+      {selectedIntelligentMode ? (
+        <IntelligentModePanel
+          appTitle={appTitle}
+          mode={selectedIntelligentMode}
+          workspaceSwitcher={workspaceSwitcher}
+        />
+      ) : (
+        <LegacyWorkspace
+          appTitle={appTitle}
+          workspaceSwitcher={workspaceSwitcher}
+        />
+      )}
     </div>
   )
 }
