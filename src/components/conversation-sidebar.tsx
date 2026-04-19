@@ -27,14 +27,14 @@ export function ConversationSidebar({
 }: ConversationSidebarProps) {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="flex items-center justify-between px-3 py-2.5">
         <div>
           <div className="text-sm font-semibold">{appTitle}</div>
           <div className="text-xs text-muted-foreground">Conversations</div>
         </div>
 
         <Button
-          size="icon"
+          size="icon-sm"
           variant="outline"
           aria-label="New chat"
           onClick={onCreateConversation}
@@ -46,7 +46,7 @@ export function ConversationSidebar({
       <Separator />
 
       <ScrollArea className="flex-1">
-        <div className="space-y-2 p-3">
+        <div className="space-y-1.5 p-2">
           {conversations.map((conv) => {
             const isActive = conv.id === activeConversationId
 
@@ -54,7 +54,7 @@ export function ConversationSidebar({
               <div
                 key={conv.id}
                 className={cn(
-                  "group flex items-start gap-2 rounded-xl px-2 py-2 transition",
+                  "group flex items-start gap-2 rounded-lg px-2 py-1.5 transition",
                   isActive && "bg-muted"
                 )}
               >
@@ -72,9 +72,9 @@ export function ConversationSidebar({
                 </button>
 
                 <Button
-                  size="icon"
+                  size="icon-sm"
                   variant="ghost"
-                  className="h-8 w-8 opacity-0 group-hover:opacity-100"
+                  className="opacity-0 group-hover:opacity-100"
                   onClick={() => onDeleteConversation(conv.id)}
                 >
                   <Trash2 className="h-4 w-4" />

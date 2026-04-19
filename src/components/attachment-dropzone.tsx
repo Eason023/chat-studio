@@ -32,7 +32,7 @@ export function AttachmentDropzone({
     <div
       {...getRootProps()}
       className={cn(
-        "mb-3 rounded-2xl border border-dashed px-4 py-4 transition",
+        "mt-2 rounded-xl border border-dashed px-3 py-3 transition",
         isDragActive && "border-primary bg-primary/5",
         disabled && "cursor-not-allowed opacity-60",
         !disabled && "cursor-pointer hover:bg-muted/40"
@@ -40,8 +40,8 @@ export function AttachmentDropzone({
     >
       <input {...getInputProps()} />
 
-      <div className="flex items-start gap-3">
-        <div className="rounded-xl border bg-background p-2">
+      <div className="flex items-start gap-2.5">
+        <div className="rounded-lg border bg-background p-2">
           <Upload className="h-4 w-4" />
         </div>
 

@@ -75,7 +75,7 @@ export function SettingsPanel({
   return (
     <>
       <div className="flex h-full flex-col">
-        <div className="px-4 py-3">
+        <div className="px-3 py-2.5">
           <div className="text-sm font-semibold">Workspace Settings</div>
           <div className="text-xs text-muted-foreground">
             Model, prompt, compare, output mode
@@ -84,12 +84,12 @@ export function SettingsPanel({
 
         <Separator />
 
-        <div className="flex-1 space-y-4 overflow-auto p-4">
-          <Card className="rounded-2xl border-border/80 shadow-sm">
-            <CardHeader className="pb-3">
+        <div className="flex-1 space-y-3 overflow-auto p-3">
+          <Card size="sm" className="rounded-xl border-border/80 shadow-sm">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm">Model</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3">
               <Select
                 value={settings.model}
                 onValueChange={(value) => update("model", value)}
@@ -106,7 +106,7 @@ export function SettingsPanel({
                 </SelectContent>
               </Select>
 
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 <div>
                   <div className="mb-2 text-xs font-medium text-muted-foreground">
                     Reasoning Mode
@@ -174,13 +174,13 @@ export function SettingsPanel({
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border-border/80 shadow-sm">
-            <CardHeader className="pb-3">
+          <Card size="sm" className="rounded-xl border-border/80 shadow-sm">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm">System Prompt</CardTitle>
             </CardHeader>
             <CardContent>
               <Textarea
-                rows={8}
+                rows={5}
                 value={settings.systemPrompt}
                 onChange={(e) => update("systemPrompt", e.target.value)}
                 className="resize-none"
@@ -188,11 +188,11 @@ export function SettingsPanel({
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border-border/80 shadow-sm">
-            <CardHeader className="pb-3">
+          <Card size="sm" className="rounded-xl border-border/80 shadow-sm">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm">Temperature</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2.5">
               <Slider
                 value={[Math.round(settings.temperature * 100)]}
                 max={100}
@@ -206,11 +206,11 @@ export function SettingsPanel({
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border-border/80 shadow-sm">
-            <CardHeader className="pb-3">
+          <Card size="sm" className="rounded-xl border-border/80 shadow-sm">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm">Output Mode</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -257,6 +257,7 @@ export function SettingsPanel({
                 <Button
                   type="button"
                   variant="outline"
+                  size="sm"
                   className="rounded-full"
                   onClick={() => {
                     if (!settings.jsonSchema) {

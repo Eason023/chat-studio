@@ -132,4 +132,9 @@
   body {
     overflow: hidden;
   }
+  .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-block: 0.5rem;
+  }
 }

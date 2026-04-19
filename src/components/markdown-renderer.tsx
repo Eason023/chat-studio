@@ -1,7 +1,9 @@
 "use client"
 
+import rehypeKatex from "rehype-katex"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
 
 type MarkdownRendererProps = {
   content: string
@@ -24,7 +26,8 @@ export function MarkdownRenderer({
       ].join(" ")}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           a: ({ ...props }) => (
             <a
