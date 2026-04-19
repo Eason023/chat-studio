@@ -1,4 +1,9 @@
 import { getDB } from "@/lib/db"
+import {
+  dedupeIntelligentMemoryEntries,
+  normalizeIntelligentMemoryKey,
+  normalizeIntelligentMemoryValue,
+} from "@/lib/intelligent-memory"
 import type {
   IntelligentGlobalMemory,
   IntelligentGlobalMemoryCategory,
@@ -10,7 +15,7 @@ const GLOBAL_MEMORY_META_KEY = "intelligent-global-memory"
 const CATEGORY_LIMITS: Record<IntelligentGlobalMemoryCategory, number> = {
   userFeatures: 12,
   instructionMemory: 12,
-  recentEvents: 16,
+  recentEvents: 10,
 }
 
 function sanitizeEntry(value: unknown): IntelligentGlobalMemoryEntry | null {
@@ -19,15 +24,8 @@ function sanitizeEntry(value: unknown): IntelligentGlobalMemoryEntry | null {
   }
 
   const record = value as Record<string, unknown>
-
-  const key =
-    typeof record.key === "string"
-      ? record.key.replace(/\s+/g, " ").trim()
-      : ""
-  const memoryValue =
-    typeof record.value === "string"
-      ? record.value.replace(/\s+/g, " ").trim()
-      : ""
+  const key = normalizeIntelligentMemoryKey(record.key)
+  const memoryValue = normalizeIntelligentMemoryValue(record.value)
 
   if (!key || !memoryValue) {
     return null
@@ -49,7 +47,7 @@ function sanitizeEntry(value: unknown): IntelligentGlobalMemoryEntry | null {
   }
 }
 
-function sanitizeCategory(
+function sanitizeEntries(
   value: unknown,
   category: IntelligentGlobalMemoryCategory
 ): IntelligentGlobalMemoryEntry[] {
@@ -57,10 +55,11 @@ function sanitizeCategory(
     return []
   }
 
-  return value
+  return dedupeIntelligentMemoryEntries(
+    value
     .map(sanitizeEntry)
     .filter((entry): entry is IntelligentGlobalMemoryEntry => Boolean(entry))
-    .slice(0, CATEGORY_LIMITS[category])
+  ).slice(0, CATEGORY_LIMITS[category])
 }
 
 export function createEmptyGlobalMemory(): IntelligentGlobalMemory {
@@ -80,12 +79,12 @@ export function sanitizeGlobalMemory(value: unknown): IntelligentGlobalMemory {
   const memory = value as Record<string, unknown>
 
   return {
-    userFeatures: sanitizeCategory(memory.userFeatures, "userFeatures"),
-    instructionMemory: sanitizeCategory(
+    userFeatures: sanitizeEntries(memory.userFeatures, "userFeatures"),
+    instructionMemory: sanitizeEntries(
       memory.instructionMemory,
       "instructionMemory"
     ),
-    recentEvents: sanitizeCategory(memory.recentEvents, "recentEvents"),
+    recentEvents: sanitizeEntries(memory.recentEvents, "recentEvents"),
     updatedAt:
       typeof memory.updatedAt === "number" && Number.isFinite(memory.updatedAt)
         ? memory.updatedAt
