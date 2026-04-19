@@ -1,5 +1,9 @@
 import { openDB, type IDBPDatabase } from "idb"
-import type { AttachmentRecord, Conversation } from "@/lib/types"
+import type {
+  AttachmentRecord,
+  Conversation,
+  IntelligentConversation,
+} from "@/lib/types"
 
 type ChatStudioDB = {
   conversations: {
@@ -9,6 +13,10 @@ type ChatStudioDB = {
   attachments: {
     key: string
     value: AttachmentRecord
+  }
+  intelligentConversations: {
+    key: string
+    value: IntelligentConversation
   }
   meta: {
     key: string
@@ -20,7 +28,7 @@ type ChatStudioDB = {
 }
 
 const DB_NAME = "chat-studio-db"
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 let dbPromise: Promise<IDBPDatabase<ChatStudioDB>> | null = null
 
@@ -42,6 +50,15 @@ export function getDB() {
 
         if (oldVersion < 2 && !db.objectStoreNames.contains("attachments")) {
           db.createObjectStore("attachments", {
+            keyPath: "id",
+          })
+        }
+
+        if (
+          oldVersion < 3 &&
+          !db.objectStoreNames.contains("intelligentConversations")
+        ) {
+          db.createObjectStore("intelligentConversations", {
             keyPath: "id",
           })
         }
