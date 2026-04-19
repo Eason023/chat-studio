@@ -1,6 +1,12 @@
 "use client"
 
-import { BrainCircuit, MessageSquareText, Plus, Trash2 } from "lucide-react"
+import {
+  BrainCircuit,
+  MessageSquareText,
+  Plus,
+  Settings2,
+  Trash2,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -13,10 +19,24 @@ type IntelligentConversationSidebarProps = {
   modeLabel: string
   conversations: IntelligentConversation[]
   activeConversationId: string | null
+  globalMemoryCount: number
   isSending: boolean
   onCreateConversation: () => void
+  onOpenMemorySettings: () => void
   onSelectConversation: (id: string) => void
   onDeleteConversation: (id: string) => void
+}
+
+function clampConversationTitle(title: string, maxLength = 28) {
+  const compact = title.replace(/\s+/g, " ").trim()
+
+  if (!compact) {
+    return "New Session"
+  }
+
+  return compact.length > maxLength
+    ? `${compact.slice(0, maxLength).trimEnd()}...`
+    : compact
 }
 
 export function IntelligentConversationSidebar({
@@ -24,8 +44,10 @@ export function IntelligentConversationSidebar({
   modeLabel,
   conversations,
   activeConversationId,
+  globalMemoryCount,
   isSending,
   onCreateConversation,
+  onOpenMemorySettings,
   onSelectConversation,
   onDeleteConversation,
 }: IntelligentConversationSidebarProps) {
@@ -41,20 +63,30 @@ export function IntelligentConversationSidebar({
             </div>
           </div>
 
-          <Button
-            size="icon-sm"
-            variant="outline"
-            aria-label="New intelligent session"
-            disabled={isSending}
-            onClick={onCreateConversation}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="Open global memory settings"
+              onClick={onOpenMemorySettings}
+            >
+              <Settings2 className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="New intelligent session"
+              disabled={isSending}
+              onClick={onCreateConversation}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="rounded-xl border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-          Session history stays local in this browser for now. Long-term memory can
-          build across these sessions later without losing per-session traceability.
+          Session history stays local in this browser. Cross-session memory currently
+          has {globalMemoryCount} stored {globalMemoryCount === 1 ? "entry" : "entries"}.
         </div>
       </div>
 
@@ -65,27 +97,30 @@ export function IntelligentConversationSidebar({
           {conversations.map((conversation) => {
             const isActive = conversation.id === activeConversationId
             const messageCount = conversation.messages.length
+            const displayTitle = clampConversationTitle(conversation.title)
 
             return (
               <div
                 key={conversation.id}
                 className={cn(
-                  "group flex items-start gap-2 rounded-xl px-2 py-2 transition",
+                  "group grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-xl px-2 py-2 transition",
                   isActive && "bg-muted"
                 )}
               >
                 <button
-                  className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                  className="min-w-0 overflow-hidden text-left"
                   disabled={isSending}
                   onClick={() => onSelectConversation(conversation.id)}
                 >
-                  <MessageSquareText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
-                      {conversation.title}
-                    </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {messageCount} messages · {formatRelativeTime(conversation.updatedAt)}
+                  <div className="flex min-w-0 items-start gap-3 overflow-hidden">
+                    <MessageSquareText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 max-w-[10.75rem] overflow-hidden pr-1 sm:max-w-[11.5rem]">
+                      <div className="truncate text-sm font-medium">
+                        {displayTitle}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {messageCount} messages | {formatRelativeTime(conversation.updatedAt)}
+                      </div>
                     </div>
                   </div>
                 </button>
@@ -93,7 +128,10 @@ export function IntelligentConversationSidebar({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  className="shrink-0 self-center opacity-0 group-hover:opacity-100"
+                  className={cn(
+                    "shrink-0 self-center",
+                    isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                  )}
                   disabled={isSending}
                   onClick={() => onDeleteConversation(conversation.id)}
                 >

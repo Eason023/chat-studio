@@ -15,6 +15,7 @@ import {
 
 import { Composer } from "@/components/composer"
 import { IntelligentConversationSidebar } from "@/components/intelligent-conversation-sidebar"
+import { IntelligentMemorySheet } from "@/components/intelligent-memory-sheet"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
@@ -25,6 +26,7 @@ import type {
   IntelligentConversationMessage,
   IntelligentMessageProcess,
   IntelligentModeSummary,
+  IntelligentPhaseMetrics,
   IntelligentTracePhase,
 } from "@/lib/types"
 
@@ -72,7 +74,7 @@ function TypewriterTextInner({
 
         return Math.min(text.length, current + 2)
       })
-    }, 18)
+    }, 14)
 
     return () => {
       window.clearInterval(interval)
@@ -97,8 +99,30 @@ function compactInlineSummary(text?: string, maxLength = 120) {
   if (!compact) return ""
 
   return compact.length > maxLength
-    ? `${compact.slice(0, maxLength)}...`
+    ? `${compact.slice(0, maxLength).trimEnd()} ... click to expand`
     : compact
+}
+
+function getPhaseMetricBadges(metrics?: IntelligentPhaseMetrics) {
+  if (!metrics) {
+    return []
+  }
+
+  const badges: string[] = []
+
+  if (typeof metrics.cacheHitRate === "number") {
+    badges.push(`KV ${metrics.cacheHitRate.toFixed(1)}%`)
+  }
+
+  if (typeof metrics.ppTps === "number") {
+    badges.push(`PP ${metrics.ppTps.toFixed(1)} tps`)
+  }
+
+  if (typeof metrics.tgTps === "number") {
+    badges.push(`TG ${metrics.tgTps.toFixed(1)} tps`)
+  }
+
+  return badges
 }
 
 function renderAttachments(attachments: IntelligentAttachmentPart[] = []) {
@@ -157,7 +181,8 @@ function PhaseTraceItem({
   phase: IntelligentTracePhase
   index: number
 }) {
-  const summary = compactInlineSummary(phase.detail, 140)
+  const summary = compactInlineSummary(phase.summary ?? phase.detail, 220)
+  const metricBadges = getPhaseMetricBadges(phase.metrics)
 
   return (
     <details className="group rounded-2xl border bg-background/80 open:bg-background">
@@ -189,6 +214,16 @@ function PhaseTraceItem({
                 {phase.lane}
               </Badge>
             ) : null}
+            {phase.reasoningMode ? (
+              <Badge variant="outline" className="rounded-full">
+                {phase.reasoningMode === "think" ? "think" : "instant"}
+              </Badge>
+            ) : null}
+            {metricBadges.map((badge) => (
+              <Badge key={badge} variant="outline" className="rounded-full">
+                {badge}
+              </Badge>
+            ))}
             <Badge
               variant={
                 phase.status === "completed"
@@ -226,10 +261,23 @@ function OrchestrationPanel({
   onToggle: () => void
 }) {
   const currentPhase = getCurrentPhase(process.phases)
+  const metricBadges = getPhaseMetricBadges(currentPhase?.metrics)
+  const titleText =
+    status === "completed"
+      ? "Reasoning complete"
+      : status === "stopped"
+        ? "Generation stopped"
+        : status === "error"
+          ? "Reasoning failed"
+          : currentPhase?.label ?? "Working through the request"
   const statusText =
-    currentPhase?.detail?.trim() ||
-    currentPhase?.label ||
-    "Preparing the next step."
+    status === "completed"
+      ? "All routing, execution, and memory updates are complete."
+      : status === "stopped"
+        ? "The current orchestration run was stopped."
+        : currentPhase?.detail?.trim() ||
+          currentPhase?.label ||
+          "Preparing the next step."
 
   return (
     <Collapsible open={expanded}>
@@ -262,6 +310,16 @@ function OrchestrationPanel({
                   {currentPhase.lane}
                 </Badge>
               ) : null}
+              {currentPhase?.reasoningMode ? (
+                <Badge variant="outline" className="rounded-full">
+                  {currentPhase.reasoningMode === "think" ? "think" : "instant"}
+                </Badge>
+              ) : null}
+              {metricBadges.map((badge) => (
+                <Badge key={badge} variant="outline" className="rounded-full">
+                  {badge}
+                </Badge>
+              ))}
               {process.route ? (
                 <Badge variant="outline" className="rounded-full">
                   <Route className="mr-1 h-3 w-3" />
@@ -270,9 +328,7 @@ function OrchestrationPanel({
               ) : null}
             </div>
 
-            <div className="text-sm font-medium">
-              {currentPhase?.label ?? "Working through the request"}
-            </div>
+            <div className="text-sm font-medium">{titleText}</div>
             <div className="mt-1 text-sm leading-6 text-muted-foreground">
               <TypewriterText text={statusText} active={status === "streaming"} />
             </div>
@@ -389,6 +445,10 @@ export function IntelligentModePanel({
     handleComposerKeyDown,
     expandedProcessMessageId,
     toggleProcessMessage,
+    globalMemory,
+    addGlobalMemoryEntry,
+    updateGlobalMemoryEntry,
+    deleteGlobalMemoryEntry,
     pendingAttachments,
     handleFilesSelected,
     removeAttachment,
@@ -396,6 +456,11 @@ export function IntelligentModePanel({
   } = useIntelligentChat(mode)
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const [memorySheetOpen, setMemorySheetOpen] = useState(false)
+  const globalMemoryCount =
+    globalMemory.userFeatures.length +
+    globalMemory.instructionMemory.length +
+    globalMemory.recentEvents.length
 
   useEffect(() => {
     const container = scrollContainerRef.current
@@ -419,8 +484,10 @@ export function IntelligentModePanel({
           modeLabel={mode.label}
           conversations={conversations}
           activeConversationId={activeConversationId}
+          globalMemoryCount={globalMemoryCount}
           isSending={isSending}
           onCreateConversation={createConversation}
+          onOpenMemorySettings={() => setMemorySheetOpen(true)}
           onSelectConversation={selectConversation}
           onDeleteConversation={deleteConversation}
         />
@@ -498,6 +565,16 @@ export function IntelligentModePanel({
           </div>
         </div>
       </div>
+
+      <IntelligentMemorySheet
+        open={memorySheetOpen}
+        onOpenChange={setMemorySheetOpen}
+        memory={globalMemory}
+        isSending={isSending}
+        onAddEntry={addGlobalMemoryEntry}
+        onUpdateEntry={updateGlobalMemoryEntry}
+        onDeleteEntry={deleteGlobalMemoryEntry}
+      />
     </div>
   )
 }
