@@ -520,47 +520,37 @@ function formatGlobalMemoryDetail(memory?: IntelligentGlobalMemory | null) {
 
 function buildGlobalMemoryContext(
   memory?: IntelligentGlobalMemory | null,
-  currentSessionKey?: string
+  _currentSessionKey?: string
 ) {
+  void _currentSessionKey
+
   if (!hasGlobalMemory(memory)) {
-    return ""
-  }
-
-  const filteredUserFeatures = (memory?.userFeatures ?? []).filter(
-    (entry) => entry.key !== currentSessionKey
-  )
-  const filteredInstructionMemory = (memory?.instructionMemory ?? []).filter(
-    (entry) => entry.key !== currentSessionKey
-  )
-  const filteredRecentEvents = (memory?.recentEvents ?? []).filter(
-    (entry) => entry.key !== currentSessionKey
-  )
-
-  if (
-    filteredUserFeatures.length === 0 &&
-    filteredInstructionMemory.length === 0 &&
-    filteredRecentEvents.length === 0
-  ) {
     return ""
   }
 
   const lines = [
     "Cross-session memory bank.",
-    "Each memory tier uses session-keyed entries. The current session key is excluded from this prefix because its details already live in the active session context.",
+    "Each memory tier uses session-keyed entries. The bank is provided verbatim for cross-session recall.",
     "",
     "User Features:",
-    ...(filteredUserFeatures.length
-      ? filteredUserFeatures.map((entry) => `- ${entry.key}: ${entry.value}`)
+    ...((memory?.userFeatures ?? []).length
+      ? (memory?.userFeatures ?? []).map(
+          (entry) => `- ${entry.key}: ${entry.value}`
+        )
       : ["- none"]),
     "",
     "Instruction Memory:",
-    ...(filteredInstructionMemory.length
-      ? filteredInstructionMemory.map((entry) => `- ${entry.key}: ${entry.value}`)
+    ...((memory?.instructionMemory ?? []).length
+      ? (memory?.instructionMemory ?? []).map(
+          (entry) => `- ${entry.key}: ${entry.value}`
+        )
       : ["- none"]),
     "",
     "Recent Events:",
-    ...(filteredRecentEvents.length
-      ? filteredRecentEvents.map((entry) => `- ${entry.key}: ${entry.value}`)
+    ...((memory?.recentEvents ?? []).length
+      ? (memory?.recentEvents ?? []).map(
+          (entry) => `- ${entry.key}: ${entry.value}`
+        )
       : ["- none"]),
   ]
 
@@ -606,6 +596,87 @@ function summarizeMessagePart(part: MessagePart) {
 function formatMessagePartsForPrompt(parts: MessagePart[]) {
   const blocks = parts.map(summarizeMessagePart).filter(Boolean)
   return blocks.length > 0 ? blocks.join("\n\n") : "(empty)"
+}
+
+function formatHistoryMessagesForPrompt(
+  history: IntelligentChatHistoryMessage[]
+) {
+  if (history.length === 0) {
+    return "No local conversation window was included for this prompt."
+  }
+
+  return history
+    .map((message, index) => {
+      const roleLabel = message.role === "user" ? "User" : "Assistant"
+      return [
+        `Turn ${index + 1} (${roleLabel})`,
+        formatMessagePartsForPrompt(message.content),
+      ].join("\n")
+    })
+    .join("\n\n")
+}
+
+function buildStepSharedRequestContext(args: {
+  analysisSummary: string
+  latestUserContentText: string
+  sessionSummary?: string
+  includeSessionSummary?: boolean
+}) {
+  return [
+    "Shared request context:",
+    `Global analysis summary: ${args.analysisSummary}`,
+    args.includeSessionSummary
+      ? `Previous-turn session note:\n${
+          args.sessionSummary || "No previous-turn session note is available."
+        }`
+      : "",
+    `Latest user content:\n${args.latestUserContentText}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function buildStepSpecificContext(args: {
+  step: PlannedStep
+  priorResultsBlock: string
+}) {
+  return [
+    "Current step details:",
+    `Step title: ${args.step.title}`,
+    `Step objective: ${args.step.objective}`,
+    `Step difficulty score: ${args.step.difficultyScore}/100`,
+    `Step context dependency score: ${args.step.contextDependencyScore}/100`,
+    `Prior completed work:\n${args.priorResultsBlock}`,
+    "Return a concise execution summary with the main findings and what should matter to the final synthesis.",
+  ].join("\n\n")
+}
+
+function buildStepSummaryContext(args: {
+  step: PlannedStep
+  analysisSummary: string
+  rawExecutionText: string
+  toolUses?: StepToolUseRecord[]
+}) {
+  return [
+    "Completed step details:",
+    `Step title: ${args.step.title}`,
+    `Step objective: ${args.step.objective}`,
+    `Analysis summary: ${args.analysisSummary}`,
+    "Convert the raw step work into a clean structured summary.",
+    "Do not repeat chain-of-thought, scratch work, or self-talk.",
+    args.toolUses?.length
+      ? `Actual MCP tool calls completed in this step:\n${args.toolUses
+          .map(
+            (toolUse, index) =>
+              `${index + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\nArguments: ${JSON.stringify(
+                toolUse.toolArguments
+              )}\nResult:\n${truncateContextBlock(toolUse.resultText, 900)}`
+          )
+          .join("\n\n")}`
+      : "No MCP tools were used in this step.",
+    "If tools were used, the summary should clearly capture the grounded findings from those tool results.",
+    `Raw step work:\n${args.rawExecutionText}`,
+  ].join("\n\n")
 }
 
 function buildFallbackTurnSessionSummary(
@@ -660,6 +731,58 @@ function normalizeTurnSessionSummaryText(
   return compact.length > SESSION_CAPSULE_CHAR_LIMIT
     ? `${compact.slice(0, SESSION_CAPSULE_CHAR_LIMIT)}...`
     : compact
+}
+
+function buildContextualSystemMessage(args: {
+  mode: IntelligentModeConfig
+  tools?: McpTool[]
+}): ProviderMessage {
+  return {
+    role: "system",
+    content: [
+      createContextualLaneSystemPrompt(args.mode),
+      "Contextual phase contract: keep this leading system prefix stable across contextual phases. Cross-session memory and per-phase instructions are appended later as user messages.",
+      `Available MCP tools:\n${formatMcpToolsForPrompt(args.tools ?? [])}`,
+    ].join("\n\n"),
+  }
+}
+
+function buildContextualPhaseMessages(args: {
+  mode: IntelligentModeConfig
+  history: IntelligentChatHistoryMessage[]
+  phaseInstruction: string
+  phaseContext?: string[]
+  globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
+  tools?: McpTool[]
+  timeContext?: string
+}) {
+  return [
+    buildContextualSystemMessage({
+      mode: args.mode,
+      tools: args.tools,
+    }),
+    ...toProviderMessages(args.history),
+    {
+      role: "user" as const,
+      content: [
+        "Contextual phase envelope.",
+        args.timeContext ?? getCurrentTimeContext(),
+        `Cross-session memory snapshot:\n${
+          buildGlobalMemoryContext(args.globalMemory) ||
+          "No cross-session memory is currently stored."
+        }`,
+        `Previous-turn session note:\n${
+          args.sessionSummary || "No previous-turn session note is available."
+        }`,
+        "The previous-turn session note is supplemental here and does not replace the full conversation history.",
+        args.phaseInstruction,
+        ...(args.phaseContext ?? []),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    },
+  ]
 }
 
 function buildJsonSchemaResponseFormat(
@@ -1181,56 +1304,40 @@ function buildRoutingGateMessages(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
   timeContext?: string
 }) {
-  return [
-    buildLeadingSystemMessage({
-      base: createContextualLaneSystemPrompt(args.mode),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
-    }),
-    ...toProviderMessages(args.history),
-    {
-      role: "user" as const,
-      content: [
-        createRoutingGateSystemPrompt(),
-        args.timeContext ?? getCurrentTimeContext(),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    },
-  ]
+  return buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
+    tools: args.tools,
+    timeContext: args.timeContext,
+    phaseInstruction: createRoutingGateSystemPrompt(),
+  })
 }
 
 function buildAnalysisMessages(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
   timeContext?: string
 }) {
-  return [
-    buildLeadingSystemMessage({
-      base: createContextualLaneSystemPrompt(args.mode),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
-    }),
-    ...toProviderMessages(args.history),
-    {
-      role: "user" as const,
-      content: [
-        createAnalysisSystemPrompt(),
-        args.timeContext ?? getCurrentTimeContext(),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    },
-  ]
+  return buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
+    tools: args.tools,
+    timeContext: args.timeContext,
+    phaseInstruction: createAnalysisSystemPrompt(),
+  })
 }
 
 function buildPlannerMessages(args: {
@@ -1239,27 +1346,21 @@ function buildPlannerMessages(args: {
   analysis: ProblemAnalysis
   latestUserSummary: string
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
   timeContext?: string
 }) {
-  return [
-    buildLeadingSystemMessage({
-      base: createContextualLaneSystemPrompt(args.mode),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
-    }),
-    ...toProviderMessages(args.history),
-    {
-      role: "user" as const,
-      content: [
-        createPlannerSystemPrompt(args.analysis),
-        args.timeContext ?? getCurrentTimeContext(),
-        `Latest user request: ${args.latestUserSummary}`,
-      ].join("\n\n"),
-    },
-  ]
+  return buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
+    tools: args.tools,
+    timeContext: args.timeContext,
+    phaseInstruction: createPlannerSystemPrompt(args.analysis),
+    phaseContext: [`Latest user request: ${args.latestUserSummary}`],
+  })
 }
 
 function buildNextTurnSessionSummaryMessages(args: {
@@ -1270,32 +1371,30 @@ function buildNextTurnSessionSummaryMessages(args: {
   finalAnswer: string
   stepResults: StepExecutionResult[]
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
+  tools?: McpTool[]
   currentSessionKey?: string
 }) {
-  return [
-    buildLeadingSystemMessage({
-      base: createContextualLaneSystemPrompt(args.mode),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-    }),
-    ...toProviderMessages(args.history),
-    {
-      role: "user" as const,
-      content: [
-        createNextTurnSessionSummarySystemPrompt(args.analysis),
-        `Latest user request: ${args.latestUserSummary}`,
-        `Final assistant answer:\n${args.finalAnswer.trim() || "No visible answer text."}`,
-        args.stepResults.length > 0
-          ? `Step summaries:\n${args.stepResults
-              .map(
-                (result, index) =>
-                  `${index + 1}. ${result.step.title}\n${result.summary}`
-              )
-              .join("\n\n")}`
-          : "Step summaries: instant route; no intermediate steps.",
-      ].join("\n\n"),
-    },
-  ]
+  return buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
+    tools: args.tools,
+    phaseInstruction: createNextTurnSessionSummarySystemPrompt(args.analysis),
+    phaseContext: [
+      `Latest user request: ${args.latestUserSummary}`,
+      `Final assistant answer:\n${args.finalAnswer.trim() || "No visible answer text."}`,
+      args.stepResults.length > 0
+        ? `Step summaries:\n${args.stepResults
+            .map(
+              (result, index) =>
+                `${index + 1}. ${result.step.title}\n${result.summary}`
+            )
+            .join("\n\n")}`
+        : "Step summaries: instant route; no intermediate steps.",
+    ],
+  })
 }
 
 function createRoutingGateSystemPrompt() {
@@ -1364,22 +1463,22 @@ function createNextTurnSessionSummarySystemPrompt(analysis: ProblemAnalysis) {
   ].join(" ")
 }
 
-function createStepSystemPrompt(mode: IntelligentModeConfig, step: PlannedStep) {
+function createStepSystemPrompt(mode: IntelligentModeConfig) {
   return [
     `You are executing an internal step for Chat Studio Intelligent Mode "${mode.label}".`,
-    `Current step: "${step.title}".`,
     "Produce concise execution notes for orchestration, not the final user-facing answer.",
     "Focus on findings, decisions, and unresolved constraints.",
+    "Shared request context and the current step details will be provided later in the user message.",
     "Before concluding the step, strongly consider using available tools whenever they can improve factual reliability or verify external information.",
     "If native tools are available in the API request and they would materially help, call them directly instead of describing pretend searches or pretend tool usage in prose.",
   ].join(" ")
 }
 
-function createStepSummarySystemPrompt(mode: IntelligentModeConfig, step: PlannedStep) {
+function createStepSummarySystemPrompt(mode: IntelligentModeConfig) {
   return [
     `You are summarizing a completed internal step for Chat Studio Intelligent Mode "${mode.label}".`,
-    `Current step: "${step.title}".`,
     "Return only the step conclusion, not hidden chain-of-thought.",
+    "Completed step details and raw step work will be provided later in the user message.",
     "The structured output must include:",
     "briefSummary: one or two sentences for the orchestration UI.",
     "summary: the full step conclusion that later steps and final synthesis can rely on.",
@@ -1435,6 +1534,7 @@ async function createStructuredRoutingGateCompletion(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
   model: string
@@ -1448,6 +1548,7 @@ async function createStructuredRoutingGateCompletion(args: {
     mode: args.mode,
     history: args.history,
     globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
     tools: args.tools,
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
@@ -1487,6 +1588,7 @@ async function createStructuredAnalysisCompletion(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
   model: string
@@ -1500,6 +1602,7 @@ async function createStructuredAnalysisCompletion(args: {
     mode: args.mode,
     history: args.history,
     globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
     tools: args.tools,
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
@@ -1541,6 +1644,7 @@ async function createStructuredPlannerCompletion(args: {
   analysis: ProblemAnalysis
   latestUserSummary: string
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
   model: string
@@ -1556,6 +1660,7 @@ async function createStructuredPlannerCompletion(args: {
     analysis: args.analysis,
     latestUserSummary: args.latestUserSummary,
     globalMemory: args.globalMemory,
+    sessionSummary: args.sessionSummary,
     tools: args.tools,
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
@@ -1962,26 +2067,22 @@ function parseRoutingGate(text: string, message: string): RoutingGate {
 }
 
 function fallbackProblemAnalysis(message: string): ProblemAnalysis {
-  const lengthScore = Math.min(90, Math.round(message.length / 6))
-  const codeLike =
-    /```|function|class|error|debug|refactor|algorithm|architecture/i.test(
-      message
-    )
-
-  const difficultyScore = codeLike ? Math.max(60, lengthScore) : lengthScore
-  const shouldUseMultiStep = codeLike || difficultyScore >= MULTI_STEP_THRESHOLD
+  const difficultyScore = Math.max(
+    24,
+    Math.min(84, Math.round(message.length / 8) + 18)
+  )
+  const contextDependencyScore = 50
+  const shouldUseMultiStep = difficultyScore >= MULTI_STEP_THRESHOLD
 
   return {
     difficultyScore,
-    contextDependencyScore: /previous|above|earlier|before|continue/i.test(message)
-      ? 70
-      : 25,
+    contextDependencyScore,
     shouldUseMultiStep,
-    recommendedStepCount: shouldUseMultiStep ? 3 : 1,
-    taskType: codeLike ? "complex_reasoning" : "general",
+    recommendedStepCount: shouldUseMultiStep ? 2 : 1,
+    taskType: "general",
     analysisSummary: shouldUseMultiStep
-      ? "The request likely benefits from deliberate decomposition."
-      : "The request appears suitable for a direct response.",
+      ? "Fallback analysis selected the multi-step path because the structured analysis response was unavailable."
+      : "Fallback analysis selected the instant path because the structured analysis response was unavailable.",
   }
 }
 
@@ -2008,23 +2109,7 @@ function parseProblemAnalysis(text: string, message: string): ProblemAnalysis {
   }
 }
 
-function messageLikelyNeedsExternalGrounding(message: string) {
-  return /latest|current|today|recent|news|official|verify|fact-check|fact check|look up|lookup|search|web|browser|browse|搜尋|查詢|最新|目前|今天|近期|官方|驗證|確認|上網/i.test(
-    message
-  )
-}
-
-function decideRoute(
-  gate: RoutingGate,
-  latestMessage: string,
-  hasMcpTools: boolean
-) {
-  const shouldForceToolBackedMultiStep =
-    hasMcpTools && messageLikelyNeedsExternalGrounding(latestMessage)
-  if (shouldForceToolBackedMultiStep) {
-    return "multi-step" as const
-  }
-
+function decideRoute(gate: RoutingGate) {
   return gate.shouldUseInstant ? ("instant" as const) : ("multi-step" as const)
 }
 
@@ -2254,7 +2339,6 @@ function buildStepExecutionMessages(args: {
   step: PlannedStep
   previousResults: StepExecutionResult[]
   latestUserContent: MessagePart[]
-  latestUserSummary: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -2270,13 +2354,13 @@ function buildStepExecutionMessages(args: {
     isHighContext
       ? args.history
       : sliceHistoryTail(args.history, historyWindow)
-  const historyMessages =
-    args.step.contextDependencyScore >= MEDIUM_CONTEXT_THRESHOLD
-      ? toProviderMessages(slicedHistory)
-      : []
   const latestUserContentText = formatMessagePartsForPrompt(
     args.latestUserContent
   )
+  const localHistoryBlock =
+    args.step.contextDependencyScore >= MEDIUM_CONTEXT_THRESHOLD
+      ? formatHistoryMessagesForPrompt(slicedHistory)
+      : "No local conversation window was included for this step."
 
   const priorResultsBlock =
     args.previousResults.length > 0
@@ -2288,33 +2372,47 @@ function buildStepExecutionMessages(args: {
           .join("\n\n")
       : "No previous step results."
 
+  const sharedRequestContextBlock = buildStepSharedRequestContext({
+    analysisSummary: args.analysis.analysisSummary,
+    latestUserContentText,
+    sessionSummary: args.sessionSummary,
+    includeSessionSummary: !isHighContext,
+  })
+  const stepSpecificContextBlock = buildStepSpecificContext({
+    step: args.step,
+    priorResultsBlock,
+  })
+
+  if (isHighContext) {
+    return buildContextualPhaseMessages({
+      mode: args.mode,
+      history: args.history,
+      globalMemory: args.globalMemory,
+      sessionSummary: args.sessionSummary,
+      tools: args.tools,
+      timeContext: args.timeContext,
+      phaseInstruction: "Current orchestration phase: execute an internal step.",
+      phaseContext: [
+        sharedRequestContextBlock,
+        stepSpecificContextBlock,
+      ],
+    })
+  }
+
   return [
     buildLeadingSystemMessage({
-      base: isHighContext
-        ? createContextualLaneSystemPrompt(args.mode)
-        : createStepSystemPrompt(args.mode, args.step),
+      base: createStepSystemPrompt(args.mode),
       globalMemory: args.globalMemory,
       currentSessionKey: args.currentSessionKey,
       tools: args.tools,
     }),
-    ...historyMessages,
     {
       role: "user" as const,
       content: [
-        isHighContext
-          ? `Current orchestration phase: execute internal step "${args.step.title}".`
-          : "",
         args.timeContext ?? getCurrentTimeContext(),
-        `Global analysis summary: ${args.analysis.analysisSummary}`,
-        args.sessionSummary
-          ? `Session summary from the previous turn:\n${args.sessionSummary}`
-          : "",
-        `Current step objective: ${args.step.objective}`,
-        `Step difficulty score: ${args.step.difficultyScore}/100`,
-        `Step context dependency score: ${args.step.contextDependencyScore}/100`,
-        `Latest user content:\n${latestUserContentText}`,
-        `Prior completed work:\n${priorResultsBlock}`,
-        "Return a concise execution summary with the main findings and what should matter to the final synthesis.",
+        sharedRequestContextBlock,
+        `Local conversation window:\n${localHistoryBlock}`,
+        stepSpecificContextBlock,
       ]
         .filter(Boolean)
         .join("\n\n"),
@@ -2335,27 +2433,35 @@ function buildInstantMessages(args: {
   const isHighContext =
     args.analysis.contextDependencyScore >= HIGH_CONTEXT_THRESHOLD
 
+  if (isHighContext) {
+    return buildContextualPhaseMessages({
+      mode: args.mode,
+      history: args.history,
+      globalMemory: args.globalMemory,
+      sessionSummary: args.sessionSummary,
+      tools: args.tools,
+      timeContext: args.timeContext,
+      phaseInstruction: createInstantSystemPrompt(args.mode, args.analysis),
+      phaseContext: ["Write the final user-facing answer now."],
+    })
+  }
+
   return [
     buildLeadingSystemMessage({
-      base: isHighContext
-        ? createContextualLaneSystemPrompt(args.mode)
-        : createInstantSystemPrompt(args.mode, args.analysis),
+      base: createInstantSystemPrompt(args.mode, args.analysis),
       globalMemory: args.globalMemory,
       currentSessionKey: args.currentSessionKey,
       tools: args.tools,
     }),
     ...toProviderMessages(
-      isHighContext
-        ? args.history
-        : sliceHistoryTail(
-            args.history,
-            getHistoryWindowForDependency(args.analysis.contextDependencyScore)
-          )
+      sliceHistoryTail(
+        args.history,
+        getHistoryWindowForDependency(args.analysis.contextDependencyScore)
+      )
     ),
     {
       role: "user" as const,
       content: [
-        isHighContext ? createInstantSystemPrompt(args.mode, args.analysis) : "",
         args.timeContext ?? getCurrentTimeContext(),
         args.sessionSummary
           ? `Session summary from the previous turn:\n${args.sessionSummary}`
@@ -2382,20 +2488,52 @@ function buildSynthesisMessages(args: {
 }) {
   const isContextual = args.lane === "contextual"
 
+  if (isContextual) {
+    return buildContextualPhaseMessages({
+      mode: args.mode,
+      history: args.history,
+      globalMemory: args.globalMemory,
+      tools: args.tools,
+      timeContext: args.timeContext,
+      phaseInstruction: createSynthesisSystemPrompt(args.mode, args.analysis),
+      phaseContext: [
+        `Original request: ${args.latestUserSummary}`,
+        `Analysis summary: ${args.analysis.analysisSummary}`,
+        "Completed step results:",
+        args.stepResults
+          .map(
+            (result, index) =>
+              `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane}, ${result.reasoningMode})\n${result.summary}${
+                result.toolUses.length > 0
+                  ? `\nTools used:\n${result.toolUses
+                      .map(
+                        (toolUse, toolIndex) =>
+                          `${toolIndex + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\n${truncateContextBlock(
+                            toolUse.resultText,
+                            800
+                          )}`
+                      )
+                      .join("\n\n")}`
+                  : ""
+              }`
+          )
+          .join("\n\n"),
+        "Write the final user-facing answer now.",
+        "Only mention tool-backed facts when they are grounded in the completed step results above.",
+      ],
+    })
+  }
+
   return [
     buildLeadingSystemMessage({
-      base: isContextual
-        ? createContextualLaneSystemPrompt(args.mode)
-        : createSynthesisSystemPrompt(args.mode, args.analysis),
+      base: createSynthesisSystemPrompt(args.mode, args.analysis),
       globalMemory: args.globalMemory,
       currentSessionKey: args.currentSessionKey,
       tools: args.tools,
     }),
-    ...(isContextual ? toProviderMessages(args.history) : []),
     {
       role: "user" as const,
       content: [
-        isContextual ? createSynthesisSystemPrompt(args.mode, args.analysis) : "",
         args.timeContext ?? getCurrentTimeContext(),
         `Original request: ${args.latestUserSummary}`,
         `Analysis summary: ${args.analysis.analysisSummary}`,
@@ -2602,9 +2740,13 @@ async function createStructuredStepSummary(args: {
   modelId: string
   lane: "contextual" | "stateless"
   slotId?: number
+  history: IntelligentChatHistoryMessage[]
   rawExecutionText: string
   toolUses?: StepToolUseRecord[]
   analysis: ProblemAnalysis
+  globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
+  tools?: McpTool[]
   signal: AbortSignal
 }) {
   const responseFormat = buildJsonSchemaResponseFormat("step_summary", {
@@ -2626,40 +2768,36 @@ async function createStructuredStepSummary(args: {
     additionalProperties: false,
   })
 
-  const messages: ProviderMessage[] = [
-    buildLeadingSystemMessage({
-      base:
-        args.lane === "contextual"
-          ? createContextualLaneSystemPrompt(args.mode)
-          : createStepSummarySystemPrompt(args.mode, args.step),
+  const summaryPromptContext = [
+    buildStepSummaryContext({
+      step: args.step,
+      analysisSummary: args.analysis.analysisSummary,
+      rawExecutionText: args.rawExecutionText,
+      toolUses: args.toolUses,
     }),
-    {
-      role: "user",
-      content: [
-        args.lane === "contextual"
-          ? createStepSummarySystemPrompt(args.mode, args.step)
-          : "",
-        `Analysis summary: ${args.analysis.analysisSummary}`,
-        `Step objective: ${args.step.objective}`,
-        "Convert the raw step work into a clean structured summary.",
-        "Do not repeat chain-of-thought, scratch work, or self-talk.",
-        args.toolUses?.length
-          ? `Actual MCP tool calls completed in this step:\n${args.toolUses
-              .map(
-                (toolUse, index) =>
-                  `${index + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\nArguments: ${JSON.stringify(
-                    toolUse.toolArguments
-                  )}\nResult:\n${truncateContextBlock(toolUse.resultText, 900)}`
-              )
-              .join("\n\n")}`
-          : "No MCP tools were used in this step.",
-        "If tools were used, the summary should clearly capture the grounded findings from those tool results.",
-        `Raw step work:\n${args.rawExecutionText}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    },
   ]
+
+  const messages: ProviderMessage[] =
+    args.lane === "contextual"
+      ? buildContextualPhaseMessages({
+          mode: args.mode,
+          history: args.history,
+          globalMemory: args.globalMemory,
+          sessionSummary: args.sessionSummary,
+          tools: args.tools,
+          phaseInstruction:
+            "Current orchestration phase: summarize a completed internal step.",
+          phaseContext: summaryPromptContext,
+        })
+      : [
+          buildLeadingSystemMessage({
+            base: createStepSummarySystemPrompt(args.mode),
+          }),
+          {
+            role: "user",
+            content: summaryPromptContext.join("\n\n"),
+          },
+        ]
 
   try {
     const completion = await createChatCompletion({
@@ -2853,7 +2991,6 @@ async function executeStepWithMcp(args: {
   step: PlannedStep
   previousResults: StepExecutionResult[]
   latestUserContent: MessagePart[]
-  latestUserSummary: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools: McpTool[]
@@ -2874,7 +3011,6 @@ async function executeStepWithMcp(args: {
     step: args.step,
     previousResults: args.previousResults,
     latestUserContent: args.latestUserContent,
-    latestUserSummary: args.latestUserSummary,
     globalMemory: args.globalMemory,
     sessionSummary: args.sessionSummary,
     tools: args.tools,
@@ -2909,35 +3045,37 @@ async function updateGlobalMemory(args: {
   latestUserSummary: string
   finalAnswer: string
   stepResults: StepExecutionResult[]
+  sessionSummary?: string
+  tools?: McpTool[]
   signal: AbortSignal
   enableThinking: boolean
   slotId?: number
 }) {
-  const messages: ProviderMessage[] = [
-    buildLeadingSystemMessage({
-      base: createGlobalMemorySystemPrompt(args.mode, args.currentSessionKey),
-      globalMemory: args.previousMemory,
-      currentSessionKey: args.currentSessionKey,
-    }),
-    ...toProviderMessages(sliceHistoryTail(args.history, MEDIUM_HISTORY_WINDOW)),
-    {
-      role: "user",
-      content: [
-        `Latest user request: ${args.latestUserSummary}`,
-        `Final assistant answer:\n${args.finalAnswer.trim() || "No visible answer text."}`,
-        args.stepResults.length > 0
-          ? `Internal step results:\n${args.stepResults
-              .map(
-                (result, index) =>
-                  `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane})\n${result.summary}`
-              )
-              .join("\n\n")}`
-          : "Internal step results: instant route; no intermediate steps.",
-        "Update the full global memory now. Keep valuable prior entries unless they are stale or contradicted.",
-        "Do not create duplicate paraphrases of facts already stored. Prefer no new memory over weak, obvious, or turn-local memories.",
-      ].join("\n\n"),
-    },
-  ]
+  const messages = buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.previousMemory,
+    sessionSummary: args.sessionSummary,
+    tools: args.tools,
+    phaseInstruction: createGlobalMemorySystemPrompt(
+      args.mode,
+      args.currentSessionKey
+    ),
+    phaseContext: [
+      `Latest user request: ${args.latestUserSummary}`,
+      `Final assistant answer:\n${args.finalAnswer.trim() || "No visible answer text."}`,
+      args.stepResults.length > 0
+        ? `Internal step results:\n${args.stepResults
+            .map(
+              (result, index) =>
+                `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane})\n${result.summary}`
+            )
+            .join("\n\n")}`
+        : "Internal step results: instant route; no intermediate steps.",
+      "Update the full global memory now. Keep valuable prior entries unless they are stale or contradicted.",
+      "Do not create duplicate paraphrases of facts already stored. Prefer no new memory over weak, obvious, or turn-local memories.",
+    ],
+  })
 
   let memoryCompletion
 
@@ -2985,6 +3123,8 @@ async function createNextTurnSessionSummary(args: {
   finalAnswer: string
   stepResults: StepExecutionResult[]
   globalMemory?: IntelligentGlobalMemory
+  sessionSummary?: string
+  tools?: McpTool[]
   currentSessionKey?: string
   signal: AbortSignal
   enableThinking: boolean
@@ -3007,6 +3147,8 @@ async function createNextTurnSessionSummary(args: {
       finalAnswer: args.finalAnswer,
       stepResults: args.stepResults,
       globalMemory: args.globalMemory,
+      sessionSummary: args.sessionSummary,
+      tools: args.tools,
       currentSessionKey: args.currentSessionKey,
     }),
   })
@@ -3224,6 +3366,7 @@ export async function POST(request: Request) {
           mode,
           history: body.history,
           globalMemory,
+          sessionSummary,
           tools: availableMcpTools,
           currentSessionKey,
           model: mode.majorModel,
@@ -3235,11 +3378,7 @@ export async function POST(request: Request) {
         })
 
         const routingGate = parseRoutingGate(routingGateCompletion.text, message)
-        const route = decideRoute(
-          routingGate,
-          message,
-          availableMcpTools.length > 0
-        )
+        const route = decideRoute(routingGate)
 
         send({
           type: "phase",
@@ -3445,17 +3584,15 @@ export async function POST(request: Request) {
             const summaryReasoningMode = selectReasoningMode({
               mode,
               modelId: mode.majorModel,
-              lane:
-                typeof majorStatelessSlotId === "number" ? "stateless" : "contextual",
+              lane: "contextual",
               difficultyScore: instantAnalysis.difficultyScore,
               contextDependencyScore: instantAnalysis.contextDependencyScore,
               phaseKind: "summary",
             })
             const housekeepingSlotId = nativeSlotControlEnabled
-              ? majorStatelessSlotId
+              ? majorContextualSlotId
               : undefined
-            const housekeepingLane =
-              typeof housekeepingSlotId === "number" ? "stateless" : "contextual"
+            const housekeepingLane = "contextual" as const
 
             send({
               type: "phase",
@@ -3481,6 +3618,8 @@ export async function POST(request: Request) {
                 finalAnswer: instantAnswer,
                 stepResults: [],
                 globalMemory,
+                sessionSummary,
+                tools: availableMcpTools,
                 currentSessionKey,
                 signal: request.signal,
                 enableThinking: summaryReasoningMode === "think",
@@ -3577,6 +3716,8 @@ export async function POST(request: Request) {
                 latestUserSummary: message,
                 finalAnswer: instantAnswer,
                 stepResults: [],
+                sessionSummary,
+                tools: availableMcpTools,
                 signal: request.signal,
                 enableThinking: globalMemoryReasoningMode === "think",
                 slotId: housekeepingSlotId,
@@ -3646,6 +3787,7 @@ export async function POST(request: Request) {
           mode,
           history: body.history,
           globalMemory,
+          sessionSummary,
           tools: availableMcpTools,
           currentSessionKey,
           model: mode.majorModel,
@@ -3704,6 +3846,7 @@ export async function POST(request: Request) {
           analysis,
           latestUserSummary: message,
           globalMemory,
+          sessionSummary,
           tools: availableMcpTools,
           currentSessionKey,
           model: mode.majorModel,
@@ -3787,7 +3930,6 @@ export async function POST(request: Request) {
                   step,
                   previousResults: stepResults,
                   latestUserContent,
-                  latestUserSummary: message,
                   globalMemory,
                   sessionSummary,
                   tools: availableMcpTools,
@@ -3839,7 +3981,6 @@ export async function POST(request: Request) {
                     step,
                     previousResults: stepResults,
                     latestUserContent,
-                    latestUserSummary: message,
                     globalMemory,
                     sessionSummary,
                     tools: availableMcpTools,
@@ -3860,14 +4001,18 @@ export async function POST(request: Request) {
             modelId: selectedExecution.modelId,
             lane: selectedExecution.lane,
             slotId:
-              nativeSlotControlEnabled && selectedExecution.lane === "stateless"
-                ? selectedExecution.slotId
-                : nativeSlotControlEnabled
-                  ? majorStatelessSlotId
-                  : undefined,
+              nativeSlotControlEnabled
+                ? selectedExecution.lane === "contextual"
+                  ? majorContextualSlotId
+                  : selectedExecution.slotId ?? majorStatelessSlotId
+                : undefined,
+            history: body.history,
             rawExecutionText: stepCompletion.text.trim(),
             toolUses: stepToolUses,
             analysis,
+            globalMemory,
+            sessionSummary,
+            tools: availableMcpTools,
             signal: request.signal,
           })
 
@@ -4003,17 +4148,15 @@ export async function POST(request: Request) {
           const summaryReasoningMode = selectReasoningMode({
             mode,
             modelId: mode.majorModel,
-            lane:
-              typeof majorStatelessSlotId === "number" ? "stateless" : "contextual",
+            lane: "contextual",
             difficultyScore: analysis.difficultyScore,
             contextDependencyScore: analysis.contextDependencyScore,
             phaseKind: "summary",
           })
           const housekeepingSlotId = nativeSlotControlEnabled
-            ? majorStatelessSlotId
+            ? majorContextualSlotId
             : undefined
-          const housekeepingLane =
-            typeof housekeepingSlotId === "number" ? "stateless" : "contextual"
+          const housekeepingLane = "contextual" as const
 
           send({
             type: "phase",
@@ -4039,6 +4182,8 @@ export async function POST(request: Request) {
               finalAnswer: synthesisAnswer,
               stepResults,
               globalMemory,
+              sessionSummary,
+              tools: availableMcpTools,
               currentSessionKey,
               signal: request.signal,
               enableThinking: summaryReasoningMode === "think",
@@ -4137,6 +4282,8 @@ export async function POST(request: Request) {
               latestUserSummary: message,
               finalAnswer: synthesisAnswer,
               stepResults,
+              sessionSummary,
+              tools: availableMcpTools,
               signal: request.signal,
               enableThinking: globalMemoryReasoningMode === "think",
               slotId: housekeepingSlotId,

@@ -95,7 +95,7 @@ The UI adds a top-level workspace selector so you can switch between `Legacy Cus
 
 - Deployer-defined intelligent modes loaded from YAML or JSON
 - Per-turn orchestration traces with phase summaries and expandable details
-- Session-aware chat flow with rolling session summaries
+- Session-aware chat flow with persisted next-turn summaries for stateless recovery
 - Editable three-tier memory store:
   user features, instruction memory, and recent events
 - Optional MCP tool usage from the server-side orchestrator
@@ -193,6 +193,7 @@ docker run --rm -p 3000:3000 \
 - For intelligent mode, prefer mounting the real config file at runtime instead of baking it into the image.
 - If your backend runs on the Docker host, do not use `127.0.0.1` inside the container. Use `host.docker.internal`.
 - The repo's `.dockerignore` excludes local env files and local intelligent config files so accidental secrets are not copied into the build context.
+- Local archives, dev output directories, and other large non-runtime files are excluded from Docker build context, and clearly non-runtime files are excluded from output tracing, so the standalone image stays smaller without dropping required Next.js runtime chunks.
 
 ## Usage Overview
 
@@ -238,63 +239,170 @@ Chat Studio is implemented as a full-stack Next.js application.
 
 The intelligent path can:
 
-- Analyze the incoming request
-- Route between instant and multi-step behavior
-- Maintain a rolling session summary
-- Update a three-tier global memory bank
-- Call MCP tools when a server is configured
-- Emit structured phase updates back to the UI through SSE
+- Route each request into a direct-answer path or a decomposed path
+- Keep full-history work on one reusable prompt shape
+- Fall back to shorter prompts when full-session context is unnecessary
+- Call optional MCP tools when a server is configured
+  MCP tools are external tools exposed by an MCP server.
+- Normalize intermediate step results before final synthesis
+- Write a short note for the next turn, then refresh cross-session memory after the answer is finished
+- Emit structured phase updates back to the UI through server-sent events (SSE)
 
-## Project Structure
+## Intelligent Workflow
 
-```text
-README.md
-Dockerfile
-intelligent.config.yaml.example
-scripts/
-  dev.mjs
-public/
-  pdf.worker.min.mjs
-src/
-  app/
-    api/
-      chat/route.ts
-      intelligent/
-        chat/route.ts
-        modes/route.ts
-      models/route.ts
-    layout.tsx
-    page.tsx
-  components/
-    home-page-client.tsx
-    legacy-workspace.tsx
-    intelligent-mode-panel.tsx
-    intelligent-memory-sheet.tsx
-    schema-workspace.tsx
-    ui/
-  hooks/
-    use-chat-session.ts
-    use-conversations.ts
-    use-intelligent-chat.ts
-    use-intelligent-modes.ts
-    use-models.ts
-  lib/
-    attachment-store.ts
-    attachments.ts
-    conversation-store.ts
-    db.ts
-    export-utils.ts
-    intelligent-config.ts
-    intelligent-conversation-store.ts
-    intelligent-global-memory-store.ts
-    intelligent-memory.ts
-    mcp-client.ts
-    pdf.ts
-    provider.ts
-    schema-utils.ts
-    storage.ts
-    types.ts
+Terms used below:
+
+- `full-context path`
+  Uses the full chat history.
+- `compact path`
+  Uses a shorter prompt with only the local context it needs.
+- `reusable prefix`
+  The stable front of a prompt that can be reused more effectively across multiple high-context phases.
+
+The intelligent workflow is built around three ideas:
+
+- Put high-context work on the `full-context path`.
+- Use the `compact path` only when carrying the full session would be wasteful.
+- Move memory updates to after the answer so the live answer path stays focused on the current request.
+
+### End-to-end timeline
+
+```mermaid
+flowchart TD
+  A["User turn"] --> B["Route the request
+  Decide: answer now or decompose"]
+
+  B -->|Direct path| C["Generate answer
+  May use tools"]
+  B -->|Multi-step path| D["Analyze the task
+  Produce structured understanding"]
+
+  D --> E["Plan the work
+  Produce a small step list"]
+  E --> F{"Does this step need
+  full conversation context?"}
+
+  F -->|Yes| G["Run on full-context path
+  Full history
+  Reusable prefix"]
+  F -->|No| H["Run on compact path
+  Compact prompt
+  Lower cost"]
+
+  G --> I["Normalize step results"]
+  H --> I
+
+  I --> J["Synthesize final answer"]
+  C --> K["Stream answer to UI"]
+  J --> K
+
+  K --> L["Create next-turn session note"]
+  L --> M["Refresh cross-session memory"]
 ```
+
+This is a serial post-answer flow: the session note is prepared first, and the global memory refresh happens after that. They are related housekeeping stages, not parallel branches.
+
+### Prompt structure and prefix cache reuse
+
+```mermaid
+flowchart LR
+  A["Stable front
+  system prompt + fixed rule text + tool catalog"] --> B["Full chat history
+  complete session turns in backend message format"]
+  B --> C["Shared request context
+  request time + memory snapshot + previous-turn note + fixed note"]
+  C --> D["Phase-specific details
+  current phase instruction + local task details"]
+  D --> E["Full-context prompt"]
+  E["Compact front
+  task prompt + optional memory block + optional tools"] --> F["Shared step context
+  analysis summary + previous-turn note + latest user content"]
+  F --> G["Local window
+  short history window or none"]
+  G --> H["Step-specific details
+  current step title + objective + prior completed work"]
+  H --> I["Compact prompt"]
+```
+
+Prompt shape:
+
+- `Full-context prompt`
+  `Stable front -> Full chat history -> Shared request context -> Phase-specific details`
+- `Compact prompt`
+  `Compact front -> Shared step context -> Local window -> Step-specific details`
+
+Where the reusable prefix comes from:
+
+- `Stable front`
+  `system prompt + fixed rule text + tool catalog`
+- `Full chat history`
+  `complete session turns in backend message format`
+- `Shared request context`
+  `request time + cross-session memory snapshot + previous-turn note + fixed note`
+- `Compact front`
+  `task prompt + optional memory block + optional tools`
+- `Shared step context`
+  `analysis summary + previous-turn note + latest user content`
+
+```mermaid
+flowchart TD
+  A["Full-context prompt"] --> B["Usually reuses the long reusable prefix
+  Routing
+  Analysis
+  Planning
+  High-context execution
+  Synthesis
+  Next-turn note
+  Cross-session memory update"]
+
+  D["Compact prompt"] --> E["Reuses a smaller shared prefix
+  Compact step execution
+  Shared across substeps before the local window and step-specific details"]
+
+  A -.-> C["Sometimes reuses the long reusable prefix
+  Direct-answer generation
+  Step result normalization
+  Only when they stay on the full-context path"]
+```
+
+The long reusable prefix for high-context work is the front of the full-context prompt: `Stable front + Full chat history + Shared request context`.
+
+Compact substeps do not reuse that full long prefix, but they now share a smaller reusable front: `Compact front + Shared step context`. This means system instructions, tools, memory, previous-turn note, analysis summary, and latest user content stay aligned before each step's local window and step-specific details begin to diverge.
+
+### System roles
+
+- `Router`
+  Decides whether the request can be answered directly or should be decomposed first.
+- `Planner`
+  Turns complex requests into a small number of focused steps instead of one large opaque generation.
+- `Executors`
+  Run each step on either the full-context path or the compact path depending on how much prior conversation matters.
+- `Synthesizer`
+  Combines grounded step results into the final user-facing answer.
+- `Memory layer`
+  Writes a short note for the next turn first, then updates cross-session memory after the answer is done.
+
+### Operating principles
+
+- The full conversation is the authoritative state for full-context work.
+- Complex requests are decomposed before execution, so the system can reason in smaller grounded steps.
+- The compact path is reserved for steps that do not need full-session continuity.
+- Tool use is attached to the execution path, not treated as a separate architecture.
+- Post-answer memory work is sequential and isolated from answer generation.
+
+### What stays stable across turns
+
+- The overall pipeline shape: route, optionally decompose, execute, synthesize, then update memory.
+- The full-context path used by the major high-context phases.
+- The separation between live reasoning and post-answer memory maintenance.
+
+### What changes across turns
+
+- The conversation itself grows.
+- Some requests stay simple and take the direct path; others branch into multi-step execution.
+- Some answer and cleanup phases stay on the full-context path, while others drop to the compact path when continuity is unnecessary.
+- Tools, retrieved facts, and memory contents change the later parts of the workflow.
+- The exact plan, execution results, and final synthesis depend on the current request.
 
 ## Dependencies
 

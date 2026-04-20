@@ -17,6 +17,7 @@
 /.next/
 /.next-dev/
 /.next-dev-*
+/.next-prod/
 /out/
 
 # production
