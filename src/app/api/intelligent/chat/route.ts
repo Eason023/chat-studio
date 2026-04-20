@@ -2312,7 +2312,6 @@ function buildStepExecutionMessages(args: {
         `Current step objective: ${args.step.objective}`,
         `Step difficulty score: ${args.step.difficultyScore}/100`,
         `Step context dependency score: ${args.step.contextDependencyScore}/100`,
-        `Latest user request summary: ${args.latestUserSummary}`,
         `Latest user content:\n${latestUserContentText}`,
         `Prior completed work:\n${priorResultsBlock}`,
         "Return a concise execution summary with the main findings and what should matter to the final synthesis.",
