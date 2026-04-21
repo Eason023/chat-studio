@@ -13,6 +13,7 @@ The app now ships with two workflows in one interface:
 ## Highlights
 
 - Dual-workspace app with a runtime switch between legacy chat and intelligent modes
+- Responsive desktop and mobile layout for both legacy and intelligent workspaces
 - Streaming chat with image and PDF attachments
 - Markdown, GitHub-flavored tables, and KaTeX math rendering
 - Regenerate and Edit & Resend flows in both legacy and intelligent usage paths
@@ -142,7 +143,8 @@ modes:
 
 - `modes` is an arbitrary object map, so you can define any number of intelligent workspaces.
 - `major_model` must also exist inside the mode's `models` map.
-- `weight` is an app-level routing hint and does not need to match the real parameter count.
+- `models.<model-id>` can be either a number shorthand or an object with `weight` and optional `slots`.
+- `weight` drives stateless model routing and should usually reflect relative model size or capability, such as parameter count in billions. Exact values do not need to be perfect, but the ordering should be meaningful.
 - `mcp_server` is optional. When present, the intelligent orchestrator can enumerate and call MCP tools.
 - MCP integration supports both Streamable HTTP and FastMCP-style SSE transports.
 - `MCP_SERVER_AUTH_TOKEN` is optional and is sent as `Authorization: Bearer <token>` when provided.
@@ -241,7 +243,7 @@ The intelligent path can:
 
 - Route each request into a direct-answer path or a decomposed path
 - Keep full-history work on one reusable prompt shape
-- Fall back to shorter prompts when full-session context is unnecessary
+- Let stateless substeps fall back to a shorter reusable prompt shape when full-session context is unnecessary
 - Call optional MCP tools when a server is configured
   MCP tools are external tools exposed by an MCP server.
 - Normalize intermediate step results before final synthesis
@@ -308,36 +310,40 @@ This is a serial post-answer flow: the session note is prepared first, and the g
 flowchart LR
   A["Major-lane front
   contextual system prompt + tool catalog"] --> B["Shared long context
-  filtered cross-session memory + full chat history"]
-  B --> C["Phase tail
+  full chat history"]
+  B --> C["Shared contextual envelope
+  request time + filtered cross-session memory snapshot"]
+  C --> D["Phase tail
   phase instruction + phase payload"]
-  C --> D["Major-lane prompt"]
+  D --> E["Major-lane prompt"]
 
-  E["Stateless front
-  step system prompt + filtered cross-session memory + tool catalog"] --> F["Shared stateless context
-  analysis summary + session note + latest user content"]
-  F --> G["Step tail
-  step objective + difficulty + prior step results"]
-  G --> H["Stateless-step prompt"]
+  F["Stateless front
+  step system prompt + filtered cross-session memory + tool catalog"] --> G["Shared stateless context
+  request time + analysis summary + session note + latest user content"]
+  G --> H["Phase tail
+  phase instruction + phase payload"]
+  H --> I["Stateless-step prompt"]
 ```
 
 Prompt shape:
 
 - `Major-lane prompt`
-  `contextual system prompt + tool catalog -> filtered cross-session memory + full chat history -> phase instruction + phase payload`
+  `contextual system prompt + tool catalog -> full chat history -> request time + filtered cross-session memory snapshot -> phase instruction + phase payload`
 - `Stateless-step prompt`
-  `step system prompt + filtered cross-session memory + tool catalog -> analysis summary + session note + latest user content -> step objective + prior step results`
+  `step system prompt + filtered cross-session memory + tool catalog -> request time + analysis summary + session note + latest user content -> phase instruction + phase payload`
 
 Where the reusable prefix comes from:
 
 - `Major-lane front`
   `contextual system prompt + tool catalog`
 - `Shared long context`
-  `cross-session memory excluding the current session key + full session history`
+  `full session history`
+- `Shared contextual envelope`
+  `request time + cross-session memory excluding the current session key`
 - `Stateless front`
   `step system prompt + filtered cross-session memory + tool catalog`
 - `Shared stateless context`
-  `analysis summary + previous-turn session note + latest user content`
+  `request time + analysis summary + previous-turn session note + latest user content`
 
 ```mermaid
 flowchart TD
@@ -347,11 +353,13 @@ flowchart TD
   Planner
   Instant answer
   Full-context substeps
+  Full-context step summaries
   Final synthesis
   Session note"]
 
   C["Stateless-step prompt"] --> D["Shorter shared prefix
-  Stateless substeps only"]
+  Stateless substeps
+  Stateless step summaries"]
 
   E["Memory-refresh prompt"] --> F["Independent stateless memory phase
   Full memory bank including current session key
@@ -359,7 +367,7 @@ flowchart TD
   Latest session note"]
 ```
 
-The long reusable prefix is the `major lane` stack. Final answers never drop out of it. Only substeps may choose the shorter stateless prompt shape.
+The long reusable prefix is the `major lane` stack. Final answers never drop out of it. Only internal step work, such as stateless substeps and stateless step summaries, may choose the shorter stateless prompt shape.
 
 The memory refresh phase is separate. It does not reuse the major-lane long prefix and it does not use the substep stateless prompt. It runs on the stateless slot with a dedicated memory-refresh prompt.
 
@@ -370,9 +378,9 @@ There is no rolling history window in the current architecture. A substep either
 - `Routing gate`
   Structured output: `shouldUseInstant`, `gateSummary`
 - `Multi-step analysis`
-  Structured output: `difficultyScore`, `shouldUseMultiStep`, `recommendedStepCount`, `taskType`, `analysisSummary`
+  Structured output: `difficultyScore`, `recommendedStepCount`, `taskType`, `groundingNeed`, `complexityFactors`, `analysisSummary`
 - `Planner`
-  Structured output: ordered steps with `id`, `title`, `objective`, `difficultyScore`, `needsFullContext`
+  Structured output: ordered steps with `id`, `title`, `objective`, `difficultyScore`, `needsFullContext`, `groundingNeed`
 - `Step summary`
   Structured output: `briefSummary`, `summary`
 - `Global memory refresh`
