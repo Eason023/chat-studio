@@ -138,21 +138,25 @@ export function ChatPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 flex items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold">{conversation?.title ?? appTitle}</h1>
+      <div className="shrink-0 flex flex-wrap items-start justify-between gap-3 px-3 py-3 sm:px-4">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:gap-3">
+          <h1 className="truncate text-lg font-semibold">
+            {conversation?.title ?? appTitle}
+          </h1>
           <Badge variant="secondary">{conversation?.settings.model || "No Model"}</Badge>
           <Badge variant="outline">
             {conversation?.settings.thinkMode ?? "instant"}
           </Badge>
         </div>
 
-        <ModeToggle />
+        <div className="shrink-0">
+          <ModeToggle />
+        </div>
       </div>
 
       <Separator className="shrink-0" />
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         <div className="mx-auto flex max-w-6xl flex-col gap-4">
           {conversation && userMessages.length > 0 ? (
             userMessages.map((userMessage) => {
@@ -175,15 +179,15 @@ export function ChatPanel({
 
               return (
                 <div key={userMessage.id} className="space-y-2.5">
-                  <div className="w-full pl-4 sm:pl-10 lg:pl-16 xl:pl-24">
+                  <div className="w-full pl-0 sm:pl-10 lg:pl-16 xl:pl-24">
                     <Card className="rounded-xl border-border/80 shadow-sm">
                       <CardContent className="p-3.5">
-                        <div className="mb-3 flex items-center justify-between gap-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <span>User</span>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
                             <Button
                               type="button"
                               size="sm"
@@ -218,7 +222,7 @@ export function ChatPanel({
                   </div>
 
                   {orderedAssistants.length > 0 ? (
-                    <div className="w-full pr-4 sm:pr-10 lg:pr-16 xl:pr-24">
+                    <div className="w-full pr-0 sm:pr-10 lg:pr-16 xl:pr-24">
                       <div
                         className={cn(
                           "grid gap-3",
@@ -364,7 +368,7 @@ export function ChatPanel({
           )}
 
           {isSending ? (
-            <div className="w-full pr-4 sm:pr-10 lg:pr-16 xl:pr-24">
+            <div className="w-full pr-0 sm:pr-10 lg:pr-16 xl:pr-24">
               <Card className="rounded-xl border-dashed border-primary/30 shadow-sm">
                 <CardContent className="p-3.5">
                   <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -381,7 +385,7 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="shrink-0 bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="shrink-0 bg-background/95 px-3 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4">
         <Composer
           value={input}
           onChange={onInputChange}

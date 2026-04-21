@@ -88,7 +88,7 @@ export function ConversationSidebar({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  className="opacity-0 group-hover:opacity-100"
+                  className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                   onClick={() => onDeleteConversation(conv.id)}
                 >
                   <Trash2 className="h-4 w-4" />

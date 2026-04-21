@@ -72,6 +72,7 @@ export function LegacyWorkspace({
 
   return (
     <AppShell
+      mobileTitle={appTitle}
       sidebar={
         <ConversationSidebar
           appTitle={appTitle}

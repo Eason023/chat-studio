@@ -7,9 +7,11 @@ import { useEffect, useRef, useState } from "react"
 import {
   ChevronDown,
   ChevronUp,
+  DatabaseZap,
   FileImage,
   FileText,
   LoaderCircle,
+  PanelLeftOpen,
   PencilLine,
   RotateCcw,
   Route,
@@ -24,6 +26,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
 import { useIntelligentChat } from "@/hooks/use-intelligent-chat"
 import { getIntelligentSessionMemoryKey } from "@/lib/intelligent-memory"
 import type {
@@ -397,7 +407,7 @@ function AssistantMessageCard({
   const process = message.process
 
   return (
-    <div className="animate-in fade-in-0 slide-in-from-bottom-2 w-full pr-4 sm:pr-10 lg:pr-16 xl:pr-24 duration-300">
+    <div className="animate-in fade-in-0 slide-in-from-bottom-2 w-full pr-0 sm:pr-10 lg:pr-16 xl:pr-24 duration-300">
       <Card className="rounded-[1.6rem] border-border/80 shadow-sm">
         <CardContent className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -448,13 +458,13 @@ function UserMessageCard({
   onRegenerate: (messageId: string) => void
 }) {
   return (
-    <div className="animate-in fade-in-0 slide-in-from-bottom-2 w-full pl-4 sm:pl-10 lg:pl-16 xl:pl-24 duration-300">
+    <div className="animate-in fade-in-0 slide-in-from-bottom-2 w-full pl-0 sm:pl-10 lg:pl-16 xl:pl-24 duration-300">
       <Card className="rounded-[1.6rem] border-border/80 bg-muted/40 shadow-sm">
         <CardContent className="p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs font-medium text-muted-foreground">User</div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -550,8 +560,62 @@ export function IntelligentModePanel({
   const currentSessionKey = getIntelligentSessionMemoryKey(activeConversation.id)
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[296px_minmax(0,1fr)] bg-background">
-      <aside className="min-h-0 min-w-0 border-r border-border">
+    <div className="flex h-full min-h-0 flex-col bg-background md:grid md:grid-cols-[296px_minmax(0,1fr)]">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5 md:hidden">
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button type="button" variant="outline" size="sm" className="rounded-full">
+              <PanelLeftOpen className="mr-2 h-4 w-4" />
+              Sessions
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-[88vw] max-w-[320px] p-0">
+            <SheetHeader className="border-b">
+              <SheetTitle>Intelligent Sessions</SheetTitle>
+              <SheetDescription>
+                Browse sessions, switch workspace mode, and open memory settings.
+              </SheetDescription>
+            </SheetHeader>
+            <div className="min-h-0 flex-1">
+              <IntelligentConversationSidebar
+                appTitle={appTitle}
+                modeLabel={mode.label}
+                workspaceSwitcher={workspaceSwitcher}
+                conversations={conversations}
+                activeConversationId={activeConversationId}
+                globalMemoryCount={globalMemoryCount}
+                isSending={isSending}
+                onCreateConversation={createConversation}
+                onOpenMemorySettings={() => setMemorySheetOpen(true)}
+                onSelectConversation={selectConversation}
+                onDeleteConversation={deleteConversation}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
+
+        <div className="min-w-0 flex-1 text-center">
+          <div className="truncate text-sm font-semibold">
+            {activeConversation.title || appTitle}
+          </div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {mode.label}
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-full"
+          onClick={() => setMemorySheetOpen(true)}
+        >
+          <DatabaseZap className="mr-2 h-4 w-4" />
+          Memory
+        </Button>
+      </div>
+
+      <aside className="hidden min-h-0 min-w-0 border-r border-border md:block">
         <IntelligentConversationSidebar
           appTitle={appTitle}
           modeLabel={mode.label}
@@ -567,10 +631,10 @@ export function IntelligentModePanel({
         />
       </aside>
 
-      <div className="flex min-h-0 min-w-0 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={scrollContainerRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 sm:py-5"
         >
           <div className="mx-auto flex max-w-6xl flex-col gap-4">
             {messages.length === 0 ? (
@@ -627,7 +691,7 @@ export function IntelligentModePanel({
           </div>
         </div>
 
-        <div className="shrink-0 bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="shrink-0 bg-background/95 px-3 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4">
           <div className="mx-auto max-w-6xl">
             <Composer
               value={input}

@@ -143,8 +143,8 @@ export function IntelligentConversationSidebar({
                   size="icon-sm"
                   variant="ghost"
                   className={cn(
-                    "shrink-0 self-center",
-                    isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    "shrink-0 self-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
+                    isActive && "sm:opacity-100"
                   )}
                   disabled={isSending}
                   onClick={() => onDeleteConversation(conversation.id)}

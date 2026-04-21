@@ -71,7 +71,7 @@ export function HomePageClient({ appTitle }: HomePageClientProps) {
 
   if (!hasIntelligentModes) {
     return (
-      <div className="h-screen">
+      <div className="h-dvh">
         <LegacyWorkspace appTitle={appTitle} />
       </div>
     )
@@ -88,7 +88,7 @@ export function HomePageClient({ appTitle }: HomePageClientProps) {
   )
 
   return (
-    <div className="h-screen bg-background text-foreground">
+    <div className="h-dvh bg-background text-foreground">
       {selectedIntelligentMode ? (
         <IntelligentModePanel
           appTitle={appTitle}
