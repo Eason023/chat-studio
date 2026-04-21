@@ -130,7 +130,6 @@ type JsonSchemaResponseFormat = {
 
 type ProblemAnalysis = {
   difficultyScore: number
-  contextDependencyScore: number
   shouldUseMultiStep: boolean
   recommendedStepCount: number
   taskType: string
@@ -147,7 +146,7 @@ type PlannedStep = {
   title: string
   objective: string
   difficultyScore: number
-  contextDependencyScore: number
+  needsFullContext: boolean
 }
 
 type StepExecutionResult = {
@@ -176,14 +175,13 @@ const STEP_SUMMARY_MAX_TOKENS = 1200
 const GLOBAL_MEMORY_MAX_TOKENS = 420
 const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 6000
 const MULTI_STEP_THRESHOLD = 58
-const HIGH_CONTEXT_THRESHOLD = 60
-const MEDIUM_CONTEXT_THRESHOLD = 40
-const CONTEXTUAL_HISTORY_WINDOW = 8
-const MEDIUM_HISTORY_WINDOW = 4
-const LOW_HISTORY_WINDOW = 2
-const SESSION_CAPSULE_HISTORY_WINDOW = 6
 const SESSION_CAPSULE_CHAR_LIMIT = 1400
 const MAX_STEP_TOOL_CALLS = 4
+const USER_FEATURE_MEMORY_LIMIT = 12
+const INSTRUCTION_MEMORY_LIMIT = 12
+const RECENT_EVENT_MEMORY_LIMIT = 10
+const THINKING_DIFFICULTY_FLOOR = 88
+const THINKING_SCORE_THRESHOLD = 92
 const DIFFICULTY_RUBRIC = [
   "Difficulty scoring rubric:",
   "0-20: greetings, simple factual questions, trivial formatting, or direct one-shot requests.",
@@ -192,15 +190,6 @@ const DIFFICULTY_RUBRIC = [
   "61-80: debugging, implementation planning, non-trivial math, code changes, or tasks with several moving parts.",
   "81-100: deep architecture, proof-like reasoning, cross-step synthesis, or hard tasks where failure is costly.",
 ].join(" ")
-const CONTEXT_RUBRIC = [
-  "Context dependency scoring rubric:",
-  "0-20: fully self-contained; prior turns are unnecessary.",
-  "21-40: minor follow-up context helps but is not critical.",
-  "41-60: several earlier details matter, but a concise recap could be enough.",
-  "61-80: the answer strongly depends on prior code, constraints, or specific conversation state.",
-  "81-100: the request is inseparable from prior session context and would likely fail without it.",
-].join(" ")
-
 type PhaseKind =
   | "analysis"
   | "summary"
@@ -382,8 +371,11 @@ function sanitizeMemoryEntries(
     return previousEntries
   }
 
-  const previousByKey = new Map(
-    previousEntries.map((entry) => [entry.key.toLowerCase(), entry])
+  const previousByIdentity = new Map(
+    previousEntries.map((entry) => [
+      `${entry.key.toLowerCase()}\u0000${entry.value.toLowerCase()}`,
+      entry,
+    ])
   )
 
   const parsedEntries = value
@@ -402,32 +394,20 @@ function sanitizeMemoryEntries(
         return null
       }
 
-      const previous = previousByKey.get(key.toLowerCase())
+      const previous = previousByIdentity.get(
+        `${key.toLowerCase()}\u0000${memoryValue.toLowerCase()}`
+      )
 
       return {
         id: previous?.id ?? createGlobalMemoryEntryId(),
         key,
         value: memoryValue,
-        updatedAt: Date.now(),
+        updatedAt: previous?.updatedAt ?? Date.now(),
       } satisfies IntelligentGlobalMemoryEntry
     })
     .filter((entry): entry is IntelligentGlobalMemoryEntry => Boolean(entry))
 
-  const nextByKey = new Map(
-    previousEntries.map((entry) => [entry.key.toLowerCase(), entry])
-  )
-
-  for (const entry of parsedEntries) {
-    nextByKey.set(entry.key.toLowerCase(), entry)
-  }
-
-  return dedupeIntelligentMemoryEntries(
-    Array.from(nextByKey.values()),
-    category
-  ).slice(
-    0,
-    limit
-  )
+  return dedupeIntelligentMemoryEntries(parsedEntries, category).slice(0, limit)
 }
 
 function sanitizeGlobalMemory(
@@ -450,19 +430,19 @@ function sanitizeGlobalMemory(
       value.userFeatures,
       previous.userFeatures,
       "userFeatures",
-      12
+      USER_FEATURE_MEMORY_LIMIT
     ),
     instructionMemory: sanitizeMemoryEntries(
       value.instructionMemory,
       previous.instructionMemory,
       "instructionMemory",
-      12
+      INSTRUCTION_MEMORY_LIMIT
     ),
     recentEvents: sanitizeMemoryEntries(
       value.recentEvents,
       previous.recentEvents,
       "recentEvents",
-      10
+      RECENT_EVENT_MEMORY_LIMIT
     ),
     updatedAt: Date.now(),
   }
@@ -520,11 +500,28 @@ function formatGlobalMemoryDetail(memory?: IntelligentGlobalMemory | null) {
 
 function buildGlobalMemoryContext(
   memory?: IntelligentGlobalMemory | null,
-  _currentSessionKey?: string
+  currentSessionKey?: string
 ) {
-  void _currentSessionKey
-
   if (!hasGlobalMemory(memory)) {
+    return ""
+  }
+
+  const filterCurrentSessionEntries = (
+    entries: IntelligentGlobalMemoryEntry[] = []
+  ) =>
+    entries.filter((entry) =>
+      currentSessionKey ? entry.key !== currentSessionKey : true
+    )
+
+  const userFeatures = filterCurrentSessionEntries(memory?.userFeatures)
+  const instructionMemory = filterCurrentSessionEntries(memory?.instructionMemory)
+  const recentEvents = filterCurrentSessionEntries(memory?.recentEvents)
+
+  if (
+    userFeatures.length === 0 &&
+    instructionMemory.length === 0 &&
+    recentEvents.length === 0
+  ) {
     return ""
   }
 
@@ -533,24 +530,18 @@ function buildGlobalMemoryContext(
     "Each memory tier uses session-keyed entries. The bank is provided verbatim for cross-session recall.",
     "",
     "User Features:",
-    ...((memory?.userFeatures ?? []).length
-      ? (memory?.userFeatures ?? []).map(
-          (entry) => `- ${entry.key}: ${entry.value}`
-        )
+    ...(userFeatures.length
+      ? userFeatures.map((entry) => `- ${entry.key}: ${entry.value}`)
       : ["- none"]),
     "",
     "Instruction Memory:",
-    ...((memory?.instructionMemory ?? []).length
-      ? (memory?.instructionMemory ?? []).map(
-          (entry) => `- ${entry.key}: ${entry.value}`
-        )
+    ...(instructionMemory.length
+      ? instructionMemory.map((entry) => `- ${entry.key}: ${entry.value}`)
       : ["- none"]),
     "",
     "Recent Events:",
-    ...((memory?.recentEvents ?? []).length
-      ? (memory?.recentEvents ?? []).map(
-          (entry) => `- ${entry.key}: ${entry.value}`
-        )
+    ...(recentEvents.length
+      ? recentEvents.map((entry) => `- ${entry.key}: ${entry.value}`)
       : ["- none"]),
   ]
 
@@ -598,24 +589,6 @@ function formatMessagePartsForPrompt(parts: MessagePart[]) {
   return blocks.length > 0 ? blocks.join("\n\n") : "(empty)"
 }
 
-function formatHistoryMessagesForPrompt(
-  history: IntelligentChatHistoryMessage[]
-) {
-  if (history.length === 0) {
-    return "No local conversation window was included for this prompt."
-  }
-
-  return history
-    .map((message, index) => {
-      const roleLabel = message.role === "user" ? "User" : "Assistant"
-      return [
-        `Turn ${index + 1} (${roleLabel})`,
-        formatMessagePartsForPrompt(message.content),
-      ].join("\n")
-    })
-    .join("\n\n")
-}
-
 function buildStepSharedRequestContext(args: {
   analysisSummary: string
   latestUserContentText: string
@@ -645,7 +618,7 @@ function buildStepSpecificContext(args: {
     `Step title: ${args.step.title}`,
     `Step objective: ${args.step.objective}`,
     `Step difficulty score: ${args.step.difficultyScore}/100`,
-    `Step context dependency score: ${args.step.contextDependencyScore}/100`,
+    `Step needs full major-lane context: ${args.step.needsFullContext ? "yes" : "no"}`,
     `Prior completed work:\n${args.priorResultsBlock}`,
     "Return a concise execution summary with the main findings and what should matter to the final synthesis.",
   ].join("\n\n")
@@ -683,8 +656,7 @@ function buildFallbackTurnSessionSummary(
   history: IntelligentChatHistoryMessage[],
   latestUserSummary: string
 ) {
-  const recentHistory = sliceHistoryTail(history, SESSION_CAPSULE_HISTORY_WINDOW)
-  const lines = recentHistory
+  const lines = history
     .map((message) => {
       const content = message.content
         .map(summarizeMessagePart)
@@ -753,8 +725,8 @@ function buildContextualPhaseMessages(args: {
   phaseInstruction: string
   phaseContext?: string[]
   globalMemory?: IntelligentGlobalMemory
-  sessionSummary?: string
   tools?: McpTool[]
+  currentSessionKey?: string
   timeContext?: string
 }) {
   return [
@@ -769,13 +741,9 @@ function buildContextualPhaseMessages(args: {
         "Contextual phase envelope.",
         args.timeContext ?? getCurrentTimeContext(),
         `Cross-session memory snapshot:\n${
-          buildGlobalMemoryContext(args.globalMemory) ||
+          buildGlobalMemoryContext(args.globalMemory, args.currentSessionKey) ||
           "No cross-session memory is currently stored."
         }`,
-        `Previous-turn session note:\n${
-          args.sessionSummary || "No previous-turn session note is available."
-        }`,
-        "The previous-turn session note is supplemental here and does not replace the full conversation history.",
         args.phaseInstruction,
         ...(args.phaseContext ?? []),
       ]
@@ -808,7 +776,7 @@ function buildRoutingGateResponseFormat() {
       shouldUseInstant: {
         type: "boolean",
         description:
-          "True only when the assistant can answer immediately without a multi-step plan.",
+          "True when a direct answer is enough, including cases where tool use may help but the work still does not justify at least two distinct internal steps.",
       },
       gateSummary: {
         type: "string",
@@ -832,20 +800,15 @@ function buildAnalysisResponseFormat() {
         description:
           "Overall task difficulty from 0 to 100 based on the provided difficulty rubric.",
       },
-      contextDependencyScore: {
-        type: "number",
-        description:
-          "How strongly the request depends on prior session context from 0 to 100 based on the provided context rubric.",
-      },
       shouldUseMultiStep: {
         type: "boolean",
         description:
-          "True only when a multi-step plan would materially improve answer quality over an instant answer.",
+          "True only when at least two distinct internal steps would materially improve answer quality over an instant answer.",
       },
       recommendedStepCount: {
         type: "number",
         description:
-          "Recommended number of plan steps from 1 to 4. Keep it small unless decomposition clearly helps.",
+          "Recommended number of plan steps from 1 to 4. Use 1 when direct answer should be enough even after deeper analysis. Use 2 or more only when the steps are meaningfully distinct.",
       },
       taskType: {
         type: "string",
@@ -860,7 +823,6 @@ function buildAnalysisResponseFormat() {
     },
     required: [
       "difficultyScore",
-      "contextDependencyScore",
       "shouldUseMultiStep",
       "recommendedStepCount",
       "taskType",
@@ -879,7 +841,9 @@ function buildPlannerResponseFormat() {
       steps: {
         type: "array",
         description:
-          "Ordered plan steps. Keep the count minimal and do not create unnecessary steps.",
+          "Ordered plan steps for a true multi-step request. Keep the count minimal, but do not collapse the plan into a single step.",
+        minItems: 2,
+        maxItems: 4,
         items: {
           type: "object",
           description: "One planned step in execution order.",
@@ -903,10 +867,10 @@ function buildPlannerResponseFormat() {
               description:
                 "Step difficulty from 0 to 100 for model and reasoning routing.",
             },
-            contextDependencyScore: {
-              type: "number",
+            needsFullContext: {
+              type: "boolean",
               description:
-                "How much this step depends on prior session context from 0 to 100.",
+                "True only when this step must run on the fixed major-lane context stack with tools, cross-session memory, and the full session history.",
             },
           },
           required: [
@@ -914,7 +878,7 @@ function buildPlannerResponseFormat() {
             "title",
             "objective",
             "difficultyScore",
-            "contextDependencyScore",
+            "needsFullContext",
           ],
           additionalProperties: false,
         },
@@ -933,7 +897,7 @@ function buildGlobalMemoryResponseFormat() {
       key: {
         type: "string",
         description:
-          "Session hash key for this memory entry.",
+          "Session hash key for this memory entry. Multiple distinct entries from the same session are allowed within one tier.",
       },
       value: {
         type: "string",
@@ -953,25 +917,25 @@ function buildGlobalMemoryResponseFormat() {
       userFeatures: {
         type: "array",
         description:
-          "Only unusually important, stable user facts or enduring preferences the user clearly cares about, represented as session-keyed entries. Do not restate facts that are already captured elsewhere in this same tier.",
+          "Only unusually important, stable user facts or enduring preferences the user clearly cares about, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct memories.",
         items: memoryEntrySchema(
-          "One user-features entry keyed by the session hash that established it."
+          "One user-features entry keyed by the session hash that established it. Several distinct entries may come from the same session."
         ),
       },
       instructionMemory: {
         type: "array",
         description:
-          "Only durable response instructions or preferences the user strongly values and would likely want preserved across sessions, represented as session-keyed entries. Do not create near-duplicate paraphrases of existing entries.",
+          "Only durable response instructions or preferences the user strongly values and would likely want preserved across sessions, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct instructions.",
         items: memoryEntrySchema(
-          "One instruction-memory entry keyed by the session hash that established it."
+          "One instruction-memory entry keyed by the session hash that established it. Several distinct entries may come from the same session."
         ),
       },
       recentEvents: {
         type: "array",
         description:
-          "Ongoing work, active deliverables, blockers, or temporary priorities, represented as session-keyed entries. Keep this freshest and shortest. Never store greetings, timestamps, pleasantries, or trivial turn-by-turn chatter.",
+          "Ongoing work, active deliverables, blockers, or temporary priorities, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct notable events. Keep this freshest and shortest. Never store greetings, timestamps, pleasantries, or trivial turn-by-turn chatter.",
         items: memoryEntrySchema(
-          "One recent-events entry keyed by the session hash that established it."
+          "One recent-events entry keyed by the session hash that established it. Several distinct entries may come from the same session."
         ),
       },
     },
@@ -1277,29 +1241,6 @@ function buildPhaseMetrics(args: {
   }
 }
 
-function sliceHistoryTail(
-  history: IntelligentChatHistoryMessage[],
-  maxMessages: number
-) {
-  if (history.length <= maxMessages) {
-    return history
-  }
-
-  return history.slice(history.length - maxMessages)
-}
-
-function getHistoryWindowForDependency(contextDependencyScore: number) {
-  if (contextDependencyScore >= HIGH_CONTEXT_THRESHOLD) {
-    return CONTEXTUAL_HISTORY_WINDOW
-  }
-
-  if (contextDependencyScore >= MEDIUM_CONTEXT_THRESHOLD) {
-    return MEDIUM_HISTORY_WINDOW
-  }
-
-  return LOW_HISTORY_WINDOW
-}
-
 function buildRoutingGateMessages(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
@@ -1313,8 +1254,8 @@ function buildRoutingGateMessages(args: {
     mode: args.mode,
     history: args.history,
     globalMemory: args.globalMemory,
-    sessionSummary: args.sessionSummary,
     tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createRoutingGateSystemPrompt(),
   })
@@ -1333,8 +1274,8 @@ function buildAnalysisMessages(args: {
     mode: args.mode,
     history: args.history,
     globalMemory: args.globalMemory,
-    sessionSummary: args.sessionSummary,
     tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createAnalysisSystemPrompt(),
   })
@@ -1355,8 +1296,8 @@ function buildPlannerMessages(args: {
     mode: args.mode,
     history: args.history,
     globalMemory: args.globalMemory,
-    sessionSummary: args.sessionSummary,
     tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createPlannerSystemPrompt(args.analysis),
     phaseContext: [`Latest user request: ${args.latestUserSummary}`],
@@ -1379,8 +1320,8 @@ function buildNextTurnSessionSummaryMessages(args: {
     mode: args.mode,
     history: args.history,
     globalMemory: args.globalMemory,
-    sessionSummary: args.sessionSummary,
     tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
     phaseInstruction: createNextTurnSessionSummarySystemPrompt(args.analysis),
     phaseContext: [
       `Latest user request: ${args.latestUserSummary}`,
@@ -1402,10 +1343,9 @@ function createRoutingGateSystemPrompt() {
     "Current orchestration phase: direct-answer gate.",
     "Decide whether the latest user request can be answered immediately or should go to the multi-step path.",
     "Keep the judgment lightweight.",
-    "Return JSON only. Do not use markdown fences.",
-    'Required JSON shape: {"shouldUseInstant":boolean,"gateSummary":"string"}',
-    "Prefer instant only for clearly direct, self-contained, low-risk requests.",
-    "If the request would benefit from decomposition, careful reasoning, verification, or tool use, choose multi-step by setting shouldUseInstant to false.",
+    "Prefer instant whenever a direct response is sufficient, even if that direct response may still use tools or careful reasoning.",
+    "Choose multi-step only when the work clearly benefits from at least two distinct internal steps such as investigate -> compare, inspect -> modify, or gather evidence -> synthesize.",
+    "If the work would effectively be one substantive action followed by the final answer, keep it on instant instead of forcing a one-step plan.",
     "gateSummary must be only one to three short sentences.",
     "gateSummary should briefly restate the user's intent and whether direct answer is enough.",
   ].join(" ")
@@ -1417,11 +1357,9 @@ function createAnalysisSystemPrompt() {
     "The request has already been routed away from instant response.",
     "Analyze the task in more depth so planning and model routing can be accurate.",
     DIFFICULTY_RUBRIC,
-    CONTEXT_RUBRIC,
-    "Return JSON only. Do not use markdown fences.",
-    'Required JSON shape: {"difficultyScore":0-100,"contextDependencyScore":0-100,"shouldUseMultiStep":boolean,"recommendedStepCount":1-4,"taskType":"string","analysisSummary":"string"}',
-    "Use higher contextDependencyScore when the answer depends on earlier conversation details.",
-    "Use recommendedStepCount to reflect the smallest useful decomposition.",
+    "Set shouldUseMultiStep to true only when at least two distinct internal steps would materially improve the answer.",
+    "If a single reasoning pass or a single tool-assisted pass is enough, set shouldUseMultiStep to false and recommendedStepCount to 1.",
+    "Use recommendedStepCount to reflect the smallest useful decomposition and avoid laundering instant work into a one-step plan.",
   ].join(" ")
 }
 
@@ -1442,13 +1380,13 @@ function createContextualLaneSystemPrompt(mode: IntelligentModeConfig) {
 function createPlannerSystemPrompt(analysis: ProblemAnalysis) {
   return [
     "Current orchestration phase: planner.",
-    `The request difficulty score is ${analysis.difficultyScore}/100 and the context dependency score is ${analysis.contextDependencyScore}/100.`,
+    `The request difficulty score is ${analysis.difficultyScore}/100.`,
     "Create the smallest useful step plan.",
-    "Return JSON only. Do not use markdown fences.",
-    'Required JSON shape: {"steps":[{"id":"step-1","title":"string","objective":"string","difficultyScore":0-100,"contextDependencyScore":0-100}]}',
     `Target ${analysis.recommendedStepCount} steps unless fewer are enough.`,
     "Do not create unnecessary steps.",
+    "Do not output a one-step plan. If only one substantive step would be enough, this request should have stayed on the instant path instead of reaching the planner.",
     "When available MCP tools can reduce hallucination, fetch external facts, or verify the answer, prefer a plan that explicitly leaves room for those tool-backed steps.",
+    "Set needsFullContext to true only when the step must run on the fixed major-lane context stack with tools, cross-session memory, and the full conversation history.",
   ].join(" ")
 }
 
@@ -1457,7 +1395,7 @@ function createNextTurnSessionSummarySystemPrompt(analysis: ProblemAnalysis) {
     "Current orchestration phase: prepare the next-turn session summary.",
     `Current analysis summary: ${analysis.analysisSummary}`,
     "Summarize the current session state so the next user turn can recover what problem is being worked on.",
-    "Keep important constraints, code/doc state, attachment context, what changed in this turn, and what would matter if the next turn uses a low-context sub-step.",
+    "Keep important constraints, code/doc state, attachment context, what changed in this turn, and what would matter if the next turn uses a stateless sub-step.",
     "Do not write a rolling memory. This summary is only a compact snapshot for the next turn.",
     "Return plain text only, concise but information-dense.",
   ].join(" ")
@@ -1479,9 +1417,7 @@ function createStepSummarySystemPrompt(mode: IntelligentModeConfig) {
     `You are summarizing a completed internal step for Chat Studio Intelligent Mode "${mode.label}".`,
     "Return only the step conclusion, not hidden chain-of-thought.",
     "Completed step details and raw step work will be provided later in the user message.",
-    "The structured output must include:",
-    "briefSummary: one or two sentences for the orchestration UI.",
-    "summary: the full step conclusion that later steps and final synthesis can rely on.",
+    "Produce a concise UI summary and a fuller reusable step conclusion.",
   ].join(" ")
 }
 
@@ -1554,32 +1490,18 @@ async function createStructuredRoutingGateCompletion(args: {
     timeContext: args.timeContext,
   })
 
-  try {
-    return await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.model,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: args.maxTokens,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      responseFormat: buildRoutingGateResponseFormat(),
-      signal: args.signal,
-    })
-  } catch {
-    return await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.model,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: args.maxTokens,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      signal: args.signal,
-    })
-  }
+  return await createChatCompletion({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    messages,
+    temperature: ANALYSIS_TEMPERATURE,
+    maxTokens: args.maxTokens,
+    enableThinking: args.enableThinking,
+    slotId: args.slotId,
+    responseFormat: buildRoutingGateResponseFormat(),
+    signal: args.signal,
+  })
 }
 
 async function createStructuredAnalysisCompletion(args: {
@@ -1608,32 +1530,18 @@ async function createStructuredAnalysisCompletion(args: {
     timeContext: args.timeContext,
   })
 
-  try {
-    return await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.model,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: args.maxTokens,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      responseFormat: buildAnalysisResponseFormat(),
-      signal: args.signal,
-    })
-  } catch {
-    return await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.model,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: args.maxTokens,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      signal: args.signal,
-    })
-  }
+  return await createChatCompletion({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    messages,
+    temperature: ANALYSIS_TEMPERATURE,
+    maxTokens: args.maxTokens,
+    enableThinking: args.enableThinking,
+    slotId: args.slotId,
+    responseFormat: buildAnalysisResponseFormat(),
+    signal: args.signal,
+  })
 }
 
 async function createStructuredPlannerCompletion(args: {
@@ -1666,32 +1574,18 @@ async function createStructuredPlannerCompletion(args: {
     timeContext: args.timeContext,
   })
 
-  try {
-    return await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.model,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: args.maxTokens,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      responseFormat: buildPlannerResponseFormat(),
-      signal: args.signal,
-    })
-  } catch {
-    return await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.model,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: args.maxTokens,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      signal: args.signal,
-    })
-  }
+  return await createChatCompletion({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    messages,
+    temperature: ANALYSIS_TEMPERATURE,
+    maxTokens: args.maxTokens,
+    enableThinking: args.enableThinking,
+    slotId: args.slotId,
+    responseFormat: buildPlannerResponseFormat(),
+    signal: args.signal,
+  })
 }
 
 function createInstantSystemPrompt(
@@ -1734,26 +1628,22 @@ function createGlobalMemorySystemPrompt(
   currentSessionKey: string
 ) {
   return [
-    `You maintain cross-session global memory for Chat Studio Intelligent Mode "${mode.label}".`,
-    "Update the three-tier session-keyed memory bank so future sessions can recover useful prior-session context without replaying old chats.",
+    `You maintain the global memory bank for Chat Studio Intelligent Mode "${mode.label}".`,
+    "This memory-refresh phase runs independently from the major lane answer path.",
     `The current session key is "${currentSessionKey}".`,
-    "Each tier still uses key:value entries where key is a session hash and value is concise memory text.",
-    "Update or replace the entry for the current session key inside the appropriate tiers based on the latest turn.",
+    "Each memory tier uses key:value entries where key is a session hash and value is concise memory text.",
+    "You will receive the full current memory bank, including any entries already stored for the current session key, so you can detect whether the memory already exists.",
+    "Update or replace the entry for the current session key only when the latest turn adds memory that is genuinely worth keeping.",
     "Preserve unrelated session entries unless they are empty, duplicate, stale, or contradicted.",
-    "Before adding a new memory for the current session, compare against the existing memory bank. If the same underlying fact, preference, or ongoing event is already captured, keep the existing memory instead of restating it under a new session key.",
-    "Use userFeatures only for unusual, stable user facts or enduring preferences the user clearly cares about and would likely want remembered later.",
-    "Use instructionMemory only for durable response instructions or preferences the user strongly values and repeatedly expects.",
-    "Use recentEvents only for ongoing projects, temporary priorities, active deliverables, blockers, or near-future context that will likely matter again soon.",
-    "Be conservative: most turns should add little or nothing to userFeatures or instructionMemory.",
-    "If something is ordinary, weakly implied, one-off, or not clearly important to the user, do not store it in userFeatures or instructionMemory.",
-    "Do not store greetings, pleasantries, current timestamps, 'user said hi', 'user thanked me', or other trivial turn-local chatter in recentEvents.",
-    "Do not store low-signal conversational meta such as the user opening the chat, acknowledging a reply, or making generic small talk.",
-    "If the latest turn adds nothing materially worth remembering, leave the current session absent from that tier instead of forcing an entry.",
-    "RecentEvents should stay short and fresh; keep at most 10 items there.",
-    "Do not duplicate the same session key multiple times inside one tier.",
+    "Be highly conservative. Most turns should add nothing.",
+    "Use userFeatures only for unusual, durable user interests, rare preferences, or stable facts the user appears to care about strongly.",
+    "Use instructionMemory only for durable response instructions or preferences the user clearly expects to persist.",
+    "Use recentEvents only for notable ongoing work, strong current priorities, blockers, or special near-term events likely to matter again soon.",
+    "Only add memory when the user is especially interested in something, repeatedly emphasizes it, or this turn introduces a distinctly important or special event.",
+    "If the latest request and summary are ordinary, one-off, weakly implied, or already captured in the memory bank, do not add or restate memory.",
+    "Do not store greetings, pleasantries, timestamps, generic acknowledgements, or trivial chat meta.",
+    "Multiple entries from the same session are allowed within one tier when they capture distinct memories, but do not create duplicate or near-duplicate restatements.",
     "Keep each memory value concise, dense, and useful for future retrieval. Do not paste the whole conversation.",
-    "Return JSON only with this exact shape:",
-    '{"userFeatures":[{"key":"session-hash","value":"memory text"}],"instructionMemory":[{"key":"session-hash","value":"memory text"}],"recentEvents":[{"key":"session-hash","value":"memory text"}]}',
   ].join(" ")
 }
 
@@ -2071,12 +1961,10 @@ function fallbackProblemAnalysis(message: string): ProblemAnalysis {
     24,
     Math.min(84, Math.round(message.length / 8) + 18)
   )
-  const contextDependencyScore = 50
   const shouldUseMultiStep = difficultyScore >= MULTI_STEP_THRESHOLD
 
   return {
     difficultyScore,
-    contextDependencyScore,
     shouldUseMultiStep,
     recommendedStepCount: shouldUseMultiStep ? 2 : 1,
     taskType: "general",
@@ -2093,14 +1981,21 @@ function parseProblemAnalysis(text: string, message: string): ProblemAnalysis {
     return fallbackProblemAnalysis(message)
   }
 
+  const shouldUseMultiStep =
+    typeof parsed.shouldUseMultiStep === "boolean"
+      ? parsed.shouldUseMultiStep
+      : false
+  const parsedStepCount = clampCount(
+    parsed.recommendedStepCount,
+    shouldUseMultiStep ? 2 : 1
+  )
+
   return {
     difficultyScore: clampScore(parsed.difficultyScore, 50),
-    contextDependencyScore: clampScore(parsed.contextDependencyScore, 40),
-    shouldUseMultiStep:
-      typeof parsed.shouldUseMultiStep === "boolean"
-        ? parsed.shouldUseMultiStep
-        : false,
-    recommendedStepCount: clampCount(parsed.recommendedStepCount, 2),
+    shouldUseMultiStep,
+    recommendedStepCount: shouldUseMultiStep
+      ? Math.max(2, parsedStepCount)
+      : 1,
     taskType: asString(parsed.taskType, "general"),
     analysisSummary: asString(
       parsed.analysisSummary,
@@ -2123,23 +2018,16 @@ function fallbackPlan(message: string, analysis: ProblemAnalysis): PlannedStep[]
         160
       )}`,
       difficultyScore: Math.max(35, analysis.difficultyScore - 10),
-      contextDependencyScore: analysis.contextDependencyScore,
+      needsFullContext: false,
     },
     {
       id: "step-2",
-      title: "Work out the solution",
-      objective: "Develop the main reasoning or solution approach.",
+      title: "Do the main work",
+      objective: "Develop the main reasoning, verification, or solution approach.",
       difficultyScore: analysis.difficultyScore,
-      contextDependencyScore: Math.max(analysis.contextDependencyScore - 10, 20),
+      needsFullContext: false,
     },
-    {
-      id: "step-3",
-      title: "Prepare the final response",
-      objective: "Convert the work into a concise user-facing answer.",
-      difficultyScore: Math.max(25, analysis.difficultyScore - 20),
-      contextDependencyScore: 35,
-    },
-  ].slice(0, Math.max(2, analysis.recommendedStepCount))
+  ].slice(0, Math.max(2, Math.min(2, analysis.recommendedStepCount)))
 }
 
 function parsePlan(
@@ -2167,16 +2055,16 @@ function parsePlan(
         title,
         objective,
         difficultyScore: clampScore(step.difficultyScore, analysis.difficultyScore),
-        contextDependencyScore: clampScore(
-          step.contextDependencyScore,
-          analysis.contextDependencyScore
-        ),
+        needsFullContext:
+          typeof step.needsFullContext === "boolean"
+            ? step.needsFullContext
+            : false,
       }
     })
     .filter((step): step is PlannedStep => Boolean(step))
     .slice(0, 4)
 
-  return steps.length > 0 ? steps : fallbackPlan(message, analysis)
+  return steps.length >= 2 ? steps : fallbackPlan(message, analysis)
 }
 
 function normalizePhaseDetail(text: string) {
@@ -2239,7 +2127,7 @@ function getModelEntries(mode: IntelligentModeConfig) {
 function selectModelAndLane(
   mode: IntelligentModeConfig,
   difficultyScore: number,
-  contextDependencyScore: number
+  needsFullContext: boolean
 ) {
   const entries = getModelEntries(mode)
   const majorEntry =
@@ -2247,9 +2135,7 @@ function selectModelAndLane(
   const maxWeight = entries[entries.length - 1]?.weight ?? majorEntry.weight
   const minWeight = entries[0]?.weight ?? majorEntry.weight
 
-  // High-context phases stay on the major contextual lane so the request can
-  // benefit from the same prefix and slot residency instead of hopping models.
-  if (contextDependencyScore >= HIGH_CONTEXT_THRESHOLD) {
+  if (needsFullContext) {
     return {
       modelId: majorEntry.id,
       lane: "contextual" as const,
@@ -2266,14 +2152,6 @@ function selectModelAndLane(
     entries.find((entry) => entry.weight >= targetWeight) ??
     entries[entries.length - 1]
 
-  if (
-    majorEntry.weight > selected.weight &&
-    contextDependencyScore >= 45 &&
-    difficultyScore >= 45
-  ) {
-    selected = majorEntry
-  }
-
   const slotId =
     selected.slots?.stateless ?? selected.slots?.contextual
 
@@ -2289,7 +2167,6 @@ function selectReasoningMode(args: {
   modelId: string
   lane: "contextual" | "stateless"
   difficultyScore: number
-  contextDependencyScore: number
   phaseKind: PhaseKind
 }): IntelligentReasoningMode {
   const selectedWeight =
@@ -2300,36 +2177,47 @@ function selectReasoningMode(args: {
     args.mode.models[args.mode.majorModel]?.weight ?? selectedWeight
   const isMajorModel = args.modelId === args.mode.majorModel
 
+  if (args.difficultyScore < THINKING_DIFFICULTY_FLOOR) {
+    return "instant"
+  }
+
   let score = args.difficultyScore
-  score += Math.max(0, args.contextDependencyScore - 50) * 0.35
 
   if (args.lane === "contextual") {
-    score += 6
+    score += 3
   }
 
   if (isMajorModel) {
-    score += 8
+    score += 4
   } else if (selectedWeight < majorWeight) {
-    score -= 10
+    score -= 14
   }
 
   if (args.phaseKind === "analysis" || args.phaseKind === "planner") {
-    score -= 8
+    score -= 14
+  }
+
+  if (args.phaseKind === "summary") {
+    score -= 18
+  }
+
+  if (args.phaseKind === "instant") {
+    score -= 10
+  }
+
+  if (args.phaseKind === "synthesis") {
+    score -= 6
   }
 
   if (args.phaseKind === "memory") {
-    score -= 12
+    score -= 26
   }
 
-  if (!isMajorModel && args.difficultyScore < 82) {
+  if (args.phaseKind === "step" && args.lane === "stateless") {
     score -= 8
   }
 
-  if (args.contextDependencyScore >= 78 && isMajorModel) {
-    score += 10
-  }
-
-  return score >= 74 ? "think" : "instant"
+  return score >= THINKING_SCORE_THRESHOLD ? "think" : "instant"
 }
 
 function buildStepExecutionMessages(args: {
@@ -2345,22 +2233,10 @@ function buildStepExecutionMessages(args: {
   currentSessionKey?: string
   timeContext?: string
 }) {
-  const historyWindow = getHistoryWindowForDependency(
-    args.step.contextDependencyScore
-  )
-  const isHighContext =
-    args.step.contextDependencyScore >= HIGH_CONTEXT_THRESHOLD
-  const slicedHistory =
-    isHighContext
-      ? args.history
-      : sliceHistoryTail(args.history, historyWindow)
+  const usesMajorContextStack = args.step.needsFullContext
   const latestUserContentText = formatMessagePartsForPrompt(
     args.latestUserContent
   )
-  const localHistoryBlock =
-    args.step.contextDependencyScore >= MEDIUM_CONTEXT_THRESHOLD
-      ? formatHistoryMessagesForPrompt(slicedHistory)
-      : "No local conversation window was included for this step."
 
   const priorResultsBlock =
     args.previousResults.length > 0
@@ -2376,20 +2252,20 @@ function buildStepExecutionMessages(args: {
     analysisSummary: args.analysis.analysisSummary,
     latestUserContentText,
     sessionSummary: args.sessionSummary,
-    includeSessionSummary: !isHighContext,
+    includeSessionSummary: !usesMajorContextStack,
   })
   const stepSpecificContextBlock = buildStepSpecificContext({
     step: args.step,
     priorResultsBlock,
   })
 
-  if (isHighContext) {
+  if (usesMajorContextStack) {
     return buildContextualPhaseMessages({
       mode: args.mode,
       history: args.history,
       globalMemory: args.globalMemory,
-      sessionSummary: args.sessionSummary,
       tools: args.tools,
+      currentSessionKey: args.currentSessionKey,
       timeContext: args.timeContext,
       phaseInstruction: "Current orchestration phase: execute an internal step.",
       phaseContext: [
@@ -2411,7 +2287,6 @@ function buildStepExecutionMessages(args: {
       content: [
         args.timeContext ?? getCurrentTimeContext(),
         sharedRequestContextBlock,
-        `Local conversation window:\n${localHistoryBlock}`,
         stepSpecificContextBlock,
       ]
         .filter(Boolean)
@@ -2430,55 +2305,22 @@ function buildInstantMessages(args: {
   currentSessionKey?: string
   timeContext?: string
 }) {
-  const isHighContext =
-    args.analysis.contextDependencyScore >= HIGH_CONTEXT_THRESHOLD
-
-  if (isHighContext) {
-    return buildContextualPhaseMessages({
-      mode: args.mode,
-      history: args.history,
-      globalMemory: args.globalMemory,
-      sessionSummary: args.sessionSummary,
-      tools: args.tools,
-      timeContext: args.timeContext,
-      phaseInstruction: createInstantSystemPrompt(args.mode, args.analysis),
-      phaseContext: ["Write the final user-facing answer now."],
-    })
-  }
-
-  return [
-    buildLeadingSystemMessage({
-      base: createInstantSystemPrompt(args.mode, args.analysis),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
-    }),
-    ...toProviderMessages(
-      sliceHistoryTail(
-        args.history,
-        getHistoryWindowForDependency(args.analysis.contextDependencyScore)
-      )
-    ),
-    {
-      role: "user" as const,
-      content: [
-        args.timeContext ?? getCurrentTimeContext(),
-        args.sessionSummary
-          ? `Session summary from the previous turn:\n${args.sessionSummary}`
-          : "",
-        "Write the final user-facing answer now.",
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    },
-  ]
+  return buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.globalMemory,
+    tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
+    timeContext: args.timeContext,
+    phaseInstruction: createInstantSystemPrompt(args.mode, args.analysis),
+    phaseContext: ["Write the final user-facing answer now."],
+  })
 }
 
 function buildSynthesisMessages(args: {
   mode: IntelligentModeConfig
   analysis: ProblemAnalysis
   history: IntelligentChatHistoryMessage[]
-  lane: "contextual" | "stateless"
   globalMemory?: IntelligentGlobalMemory
   currentSessionKey?: string
   latestUserSummary: string
@@ -2486,83 +2328,40 @@ function buildSynthesisMessages(args: {
   tools?: McpTool[]
   timeContext?: string
 }) {
-  const isContextual = args.lane === "contextual"
-
-  if (isContextual) {
-    return buildContextualPhaseMessages({
-      mode: args.mode,
-      history: args.history,
-      globalMemory: args.globalMemory,
-      tools: args.tools,
-      timeContext: args.timeContext,
-      phaseInstruction: createSynthesisSystemPrompt(args.mode, args.analysis),
-      phaseContext: [
-        `Original request: ${args.latestUserSummary}`,
-        `Analysis summary: ${args.analysis.analysisSummary}`,
-        "Completed step results:",
-        args.stepResults
-          .map(
-            (result, index) =>
-              `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane}, ${result.reasoningMode})\n${result.summary}${
-                result.toolUses.length > 0
-                  ? `\nTools used:\n${result.toolUses
-                      .map(
-                        (toolUse, toolIndex) =>
-                          `${toolIndex + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\n${truncateContextBlock(
-                            toolUse.resultText,
-                            800
-                          )}`
-                      )
-                      .join("\n\n")}`
-                  : ""
-              }`
-          )
-          .join("\n\n"),
-        "Write the final user-facing answer now.",
-        "Only mention tool-backed facts when they are grounded in the completed step results above.",
-      ],
-    })
-  }
-
-  return [
-    buildLeadingSystemMessage({
-      base: createSynthesisSystemPrompt(args.mode, args.analysis),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
-    }),
-    {
-      role: "user" as const,
-      content: [
-        args.timeContext ?? getCurrentTimeContext(),
-        `Original request: ${args.latestUserSummary}`,
-        `Analysis summary: ${args.analysis.analysisSummary}`,
-        "Completed step results:",
-        args.stepResults
-          .map(
-            (result, index) =>
-              `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane}, ${result.reasoningMode})\n${result.summary}${
-                result.toolUses.length > 0
-                  ? `\nTools used:\n${result.toolUses
-                      .map(
-                        (toolUse, toolIndex) =>
-                          `${toolIndex + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\n${truncateContextBlock(
-                            toolUse.resultText,
-                            800
-                          )}`
-                      )
-                      .join("\n\n")}`
-                  : ""
-              }`
-          )
-          .join("\n\n"),
-        "Write the final user-facing answer now.",
-        "Only mention tool-backed facts when they are grounded in the completed step results above.",
-      ]
-        .filter(Boolean)
+  return buildContextualPhaseMessages({
+    mode: args.mode,
+    history: args.history,
+    globalMemory: args.globalMemory,
+    tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
+    timeContext: args.timeContext,
+    phaseInstruction: createSynthesisSystemPrompt(args.mode, args.analysis),
+    phaseContext: [
+      `Original request: ${args.latestUserSummary}`,
+      `Analysis summary: ${args.analysis.analysisSummary}`,
+      "Completed step results:",
+      args.stepResults
+        .map(
+          (result, index) =>
+            `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane}, ${result.reasoningMode})\n${result.summary}${
+              result.toolUses.length > 0
+                ? `\nTools used:\n${result.toolUses
+                    .map(
+                      (toolUse, toolIndex) =>
+                        `${toolIndex + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\n${truncateContextBlock(
+                          toolUse.resultText,
+                          800
+                        )}`
+                    )
+                    .join("\n\n")}`
+                : ""
+            }`
+        )
         .join("\n\n"),
-    },
-  ]
+      "Write the final user-facing answer now.",
+      "Only mention tool-backed facts when they are grounded in the completed step results above.",
+    ],
+  })
 }
 
 async function executeInstantWithMcp(args: {
@@ -2747,6 +2546,7 @@ async function createStructuredStepSummary(args: {
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
+  currentSessionKey?: string
   signal: AbortSignal
 }) {
   const responseFormat = buildJsonSchemaResponseFormat("step_summary", {
@@ -2783,8 +2583,8 @@ async function createStructuredStepSummary(args: {
           mode: args.mode,
           history: args.history,
           globalMemory: args.globalMemory,
-          sessionSummary: args.sessionSummary,
           tools: args.tools,
+          currentSessionKey: args.currentSessionKey,
           phaseInstruction:
             "Current orchestration phase: summarize a completed internal step.",
           phaseContext: summaryPromptContext,
@@ -2799,43 +2599,20 @@ async function createStructuredStepSummary(args: {
           },
         ]
 
-  try {
-    const completion = await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.modelId,
-      messages,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: STEP_SUMMARY_MAX_TOKENS,
-      enableThinking: false,
-      slotId: args.slotId,
-      responseFormat,
-      signal: args.signal,
-    })
+  const completion = await createChatCompletion({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.modelId,
+    messages,
+    temperature: ANALYSIS_TEMPERATURE,
+    maxTokens: STEP_SUMMARY_MAX_TOKENS,
+    enableThinking: false,
+    slotId: args.slotId,
+    responseFormat,
+    signal: args.signal,
+  })
 
-    return parseStructuredStepSummary(completion.text)
-  } catch {
-    const fallbackCompletion = await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.modelId,
-      messages: [
-        ...messages,
-        {
-          role: "user",
-          content:
-            'Return JSON only with this exact shape: {"briefSummary":"string","summary":"string"}',
-        },
-      ],
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: STEP_SUMMARY_MAX_TOKENS,
-      enableThinking: false,
-      slotId: args.slotId,
-      signal: args.signal,
-    })
-
-    return parseStructuredStepSummary(fallbackCompletion.text)
-  }
+  return parseStructuredStepSummary(completion.text)
 }
 
 async function executeNativeToolLoop(args: {
@@ -3039,72 +2816,45 @@ async function updateGlobalMemory(args: {
   baseUrl: string
   apiKey?: string
   mode: IntelligentModeConfig
-  history: IntelligentChatHistoryMessage[]
   previousMemory?: IntelligentGlobalMemory
   currentSessionKey: string
   latestUserSummary: string
-  finalAnswer: string
-  stepResults: StepExecutionResult[]
-  sessionSummary?: string
-  tools?: McpTool[]
+  latestSessionSummary: string
   signal: AbortSignal
   enableThinking: boolean
   slotId?: number
 }) {
-  const messages = buildContextualPhaseMessages({
-    mode: args.mode,
-    history: args.history,
-    globalMemory: args.previousMemory,
-    sessionSummary: args.sessionSummary,
-    tools: args.tools,
-    phaseInstruction: createGlobalMemorySystemPrompt(
-      args.mode,
-      args.currentSessionKey
-    ),
-    phaseContext: [
-      `Latest user request: ${args.latestUserSummary}`,
-      `Final assistant answer:\n${args.finalAnswer.trim() || "No visible answer text."}`,
-      args.stepResults.length > 0
-        ? `Internal step results:\n${args.stepResults
-            .map(
-              (result, index) =>
-                `${index + 1}. ${result.step.title} (${result.modelId}, ${result.lane})\n${result.summary}`
-            )
-            .join("\n\n")}`
-        : "Internal step results: instant route; no intermediate steps.",
-      "Update the full global memory now. Keep valuable prior entries unless they are stale or contradicted.",
-      "Do not create duplicate paraphrases of facts already stored. Prefer no new memory over weak, obvious, or turn-local memories.",
-    ],
+  const messages: ProviderMessage[] = [
+    buildLeadingSystemMessage({
+      base: createGlobalMemorySystemPrompt(args.mode, args.currentSessionKey),
+      globalMemory: args.previousMemory,
+      // Deliberately include the current session key here so this phase can
+      // decide whether the memory is already captured.
+      currentSessionKey: undefined,
+    }),
+    {
+      role: "user",
+      content: [
+        `Latest user request: ${args.latestUserSummary}`,
+        `Latest session summary:\n${args.latestSessionSummary.trim() || "No session summary was produced."}`,
+        "Review the full memory bank and decide whether the current session key needs a new or updated memory entry.",
+        "Prefer leaving the current session absent from a tier over writing weak or generic memory.",
+      ].join("\n\n"),
+    },
+  ]
+
+  const memoryCompletion = await createChatCompletion({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.mode.majorModel,
+    temperature: ANALYSIS_TEMPERATURE,
+    maxTokens: GLOBAL_MEMORY_MAX_TOKENS,
+    enableThinking: args.enableThinking,
+    slotId: args.slotId,
+    responseFormat: buildGlobalMemoryResponseFormat(),
+    signal: args.signal,
+    messages,
   })
-
-  let memoryCompletion
-
-  try {
-    memoryCompletion = await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.mode.majorModel,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: GLOBAL_MEMORY_MAX_TOKENS,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      responseFormat: buildGlobalMemoryResponseFormat(),
-      signal: args.signal,
-      messages,
-    })
-  } catch {
-    memoryCompletion = await createChatCompletion({
-      baseUrl: args.baseUrl,
-      apiKey: args.apiKey,
-      model: args.mode.majorModel,
-      temperature: ANALYSIS_TEMPERATURE,
-      maxTokens: GLOBAL_MEMORY_MAX_TOKENS,
-      enableThinking: args.enableThinking,
-      slotId: args.slotId,
-      signal: args.signal,
-      messages,
-    })
-  }
 
   return {
     memory: parseGlobalMemory(memoryCompletion.text, args.previousMemory),
@@ -3267,7 +3017,6 @@ export async function POST(request: Request) {
     modelId: mode.majorModel,
     lane: "contextual",
     difficultyScore: preAnalysisHeuristic.difficultyScore,
-    contextDependencyScore: preAnalysisHeuristic.contextDependencyScore,
     phaseKind: "analysis",
   })
 
@@ -3280,10 +3029,344 @@ export async function POST(request: Request) {
       const send = (payload: IntelligentChatStreamEvent) => {
         controller.enqueue(encoder.encode(makeSseChunk(payload)))
       }
+      let availableMcpTools: McpTool[] = []
+
+      const runInstantPath = async (instantAnalysis: ProblemAnalysis) => {
+        let instantAnswer = ""
+        const instantLane = "contextual" as const
+        const instantReasoningMode = selectReasoningMode({
+          mode,
+          modelId: mode.majorModel,
+          lane: instantLane,
+          difficultyScore: instantAnalysis.difficultyScore,
+          phaseKind: "instant",
+        })
+
+        send({
+          type: "phase",
+          phase: {
+            id: "instant-response",
+            label: "Constructing response",
+            status: "active",
+            detail: `Direct answer via ${mode.majorModel}.`,
+            modelId: mode.majorModel,
+            lane: instantLane,
+            reasoningMode: instantReasoningMode,
+          },
+        })
+
+        const instantSlotId = majorContextualSlotId
+        const usingInstantMcp = Boolean(mcpServerUrl && availableMcpTools.length > 0)
+
+        const instantCompletion =
+          usingInstantMcp
+            ? await executeInstantWithMcp({
+                baseUrl,
+                apiKey,
+                serverUrl: mcpServerUrl!,
+                authToken: mcpServerAuthToken,
+                mode,
+                analysis: instantAnalysis,
+                history: body.history,
+                globalMemory,
+                sessionSummary,
+                tools: availableMcpTools,
+                currentSessionKey,
+                modelId: mode.majorModel,
+                reasoningMode: instantReasoningMode,
+                slotId: instantSlotId,
+                timeContext: requestTimeContext,
+                signal: request.signal,
+                onProgress: (status) => {
+                  if (request.signal.aborted) {
+                    return
+                  }
+
+                  send({
+                    type: "phase",
+                    phase: {
+                      id: "instant-response",
+                      label: "Constructing response",
+                      status: "active",
+                      summary: status,
+                      detail: status,
+                      modelId: mode.majorModel,
+                      lane: instantLane,
+                      reasoningMode: instantReasoningMode,
+                    },
+                  })
+                },
+                onToken: (text) => {
+                  if (!request.signal.aborted) {
+                    instantAnswer += text
+                    send({ type: "token", text })
+                  }
+                },
+              })
+            : await streamChatCompletion({
+                baseUrl,
+                apiKey,
+                model: mode.majorModel,
+                temperature: EXECUTION_TEMPERATURE,
+                enableThinking: instantReasoningMode === "think",
+                slotId: instantSlotId,
+                signal: request.signal,
+                messages: buildInstantMessages({
+                  mode,
+                  analysis: instantAnalysis,
+                  history: body.history,
+                  globalMemory,
+                  sessionSummary,
+                  tools: availableMcpTools,
+                  currentSessionKey,
+                  timeContext: requestTimeContext,
+                }),
+                onToken: (text) => {
+                  if (!request.signal.aborted) {
+                    instantAnswer += text
+                    send({ type: "token", text })
+                  }
+                },
+                emitReasoningToOutput: false,
+              })
+
+        const instantToolUses =
+          "toolUses" in instantCompletion && Array.isArray(instantCompletion.toolUses)
+            ? instantCompletion.toolUses
+            : []
+
+        const instantCompletionText =
+          "text" in instantCompletion &&
+          typeof instantCompletion.text === "string"
+            ? instantCompletion.text.trim()
+            : ""
+
+        if (usingInstantMcp && !instantAnswer && instantCompletionText) {
+          instantAnswer = instantCompletionText
+          if (!request.signal.aborted) {
+            send({ type: "token", text: instantAnswer })
+          }
+        }
+
+        if (!usingInstantMcp && instantCompletionText) {
+          instantAnswer = instantCompletionText
+          if (instantAnswer && !request.signal.aborted) {
+            send({ type: "token", text: instantAnswer })
+          }
+        }
+
+        if (request.signal.aborted) {
+          return
+        }
+
+        send({
+          type: "phase",
+          phase: {
+            id: "instant-response",
+            label: "Constructing response",
+            status: "completed",
+            summary: summarizeToolUsesForPhaseSummary(instantToolUses) || undefined,
+            detail: normalizePhaseDetail(
+              [
+                instantToolUses.length > 0
+                  ? "Instant response completed with native tool use."
+                  : "Instant response completed.",
+                formatToolUsesForPhaseDetail(instantToolUses),
+              ]
+                .filter(Boolean)
+                .join("\n\n")
+            ),
+            modelId: instantCompletion.model,
+            lane: instantLane,
+            reasoningMode: instantReasoningMode,
+            metrics: nativeSlotControlEnabled ? instantCompletion.metrics : undefined,
+          },
+        })
+
+        const summaryReasoningMode = selectReasoningMode({
+          mode,
+          modelId: mode.majorModel,
+          lane: "contextual",
+          difficultyScore: instantAnalysis.difficultyScore,
+          phaseKind: "summary",
+        })
+        const housekeepingSlotId = nativeSlotControlEnabled
+          ? majorContextualSlotId
+          : undefined
+        const housekeepingLane = "contextual" as const
+
+        send({
+          type: "phase",
+          phase: {
+            id: "session-summary",
+            label: "Preparing session summary",
+            status: "active",
+            detail: "Preparing a compact session snapshot for the next user turn.",
+            modelId: mode.majorModel,
+            lane: housekeepingLane,
+            reasoningMode: summaryReasoningMode,
+          },
+        })
+
+        let currentTurnSessionSummary = ""
+
+        try {
+          const nextSessionSummary = await createNextTurnSessionSummaryWithRetry({
+            baseUrl,
+            apiKey,
+            mode,
+            history: body.history,
+            analysis: instantAnalysis,
+            latestUserSummary: message,
+            finalAnswer: instantAnswer,
+            stepResults: [],
+            globalMemory,
+            sessionSummary,
+            tools: availableMcpTools,
+            currentSessionKey,
+            signal: request.signal,
+            enableThinking: summaryReasoningMode === "think",
+            slotId: housekeepingSlotId,
+          })
+          currentTurnSessionSummary = nextSessionSummary.summary
+          if (!request.signal.aborted) {
+            send({
+              type: "phase",
+              phase: {
+                id: "session-summary",
+                label: "Preparing session summary",
+                status: "completed",
+                detail: nextSessionSummary.summary,
+                modelId: nextSessionSummary.model,
+                lane: housekeepingLane,
+                reasoningMode: summaryReasoningMode,
+                metrics: nativeSlotControlEnabled
+                  ? nextSessionSummary.metrics
+                  : undefined,
+              },
+            })
+            send({
+              type: "session_summary",
+              summary: {
+                text: nextSessionSummary.summary,
+                updatedAt: Date.now(),
+              },
+            })
+          }
+        } catch (summaryError) {
+          const fallbackSummary = buildFallbackTurnSessionSummary(
+            body.history,
+            message
+          )
+          currentTurnSessionSummary = fallbackSummary
+          if (!request.signal.aborted) {
+            send({
+              type: "phase",
+              phase: {
+                id: "session-summary",
+                label: "Preparing session summary",
+                status: "completed",
+                summary: "Used fallback summary after the upstream summary request failed.",
+                detail:
+                  summaryError instanceof Error
+                    ? `Upstream summary request failed: ${summaryError.message}\n\nFallback summary:\n${fallbackSummary}`
+                    : `Fallback summary:\n${fallbackSummary}`,
+                modelId: mode.majorModel,
+                lane: housekeepingLane,
+                reasoningMode: summaryReasoningMode,
+              },
+            })
+            send({
+              type: "session_summary",
+              summary: {
+                text: fallbackSummary,
+                updatedAt: Date.now(),
+              },
+            })
+          }
+        }
+
+        const globalMemoryReasoningMode = selectReasoningMode({
+          mode,
+          modelId: mode.majorModel,
+          lane: "stateless",
+          difficultyScore: instantAnalysis.difficultyScore,
+          phaseKind: "memory",
+        })
+
+        send({
+          type: "phase",
+          phase: {
+            id: "global-memory",
+            label: "Updating global memory",
+            status: "active",
+            detail: hasGlobalMemory(globalMemory)
+              ? "Refreshing cross-session memory with the latest turn."
+              : "Creating the first cross-session memory entries.",
+            modelId: mode.majorModel,
+            lane: "stateless",
+            reasoningMode: globalMemoryReasoningMode,
+          },
+        })
+
+        try {
+          const nextGlobalMemory = await updateGlobalMemory({
+            baseUrl,
+            apiKey,
+            mode,
+            previousMemory: globalMemory,
+            currentSessionKey,
+            latestUserSummary: message,
+            latestSessionSummary: currentTurnSessionSummary,
+            signal: request.signal,
+            enableThinking: globalMemoryReasoningMode === "think",
+            slotId: majorStatelessSlotId,
+          })
+          if (!request.signal.aborted) {
+            send({
+              type: "phase",
+              phase: {
+                id: "global-memory",
+                label: "Updating global memory",
+                status: "completed",
+                detail: formatGlobalMemoryDetail(nextGlobalMemory.memory),
+                modelId: nextGlobalMemory.model,
+                lane: "stateless",
+                reasoningMode: globalMemoryReasoningMode,
+                metrics: nativeSlotControlEnabled
+                  ? nextGlobalMemory.metrics
+                  : undefined,
+              },
+            })
+            send({
+              type: "global_memory",
+              memory: nextGlobalMemory.memory,
+            })
+          }
+        } catch (memoryError) {
+          if (!request.signal.aborted) {
+            send({
+              type: "phase",
+              phase: {
+                id: "global-memory",
+                label: "Updating global memory",
+                status: "error",
+                detail:
+                  memoryError instanceof Error
+                    ? memoryError.message
+                    : "Failed to update global memory.",
+                modelId: mode.majorModel,
+                lane: "stateless",
+                reasoningMode: globalMemoryReasoningMode,
+              },
+            })
+          }
+        }
+
+        send({ type: "done" })
+      }
 
       try {
-        let availableMcpTools: McpTool[] = []
-
         if (mcpServerUrl) {
           send({
             type: "phase",
@@ -3408,7 +3491,6 @@ export async function POST(request: Request) {
           },
         })
 
-        let instantAnswer = ""
         const instantAnalysis: ProblemAnalysis = {
           ...preAnalysisHeuristic,
           shouldUseMultiStep: false,
@@ -3417,354 +3499,7 @@ export async function POST(request: Request) {
         }
 
         if (route === "instant") {
-          const instantLane =
-            instantAnalysis.contextDependencyScore >= HIGH_CONTEXT_THRESHOLD
-              ? "contextual"
-              : "stateless"
-          const instantReasoningMode = selectReasoningMode({
-            mode,
-            modelId: mode.majorModel,
-            lane: instantLane,
-            difficultyScore: instantAnalysis.difficultyScore,
-            contextDependencyScore: instantAnalysis.contextDependencyScore,
-            phaseKind: "instant",
-          })
-
-          send({
-            type: "phase",
-            phase: {
-              id: "instant-response",
-              label: "Constructing response",
-              status: "active",
-              detail: `Direct answer via ${mode.majorModel}.`,
-              modelId: mode.majorModel,
-              lane: instantLane,
-              reasoningMode: instantReasoningMode,
-            },
-          })
-
-          const instantSlotId =
-            instantAnalysis.contextDependencyScore >= HIGH_CONTEXT_THRESHOLD
-              ? majorContextualSlotId
-              : majorStatelessSlotId
-          const usingInstantMcp = Boolean(
-            mcpServerUrl && availableMcpTools.length > 0
-          )
-
-          const instantCompletion =
-            usingInstantMcp
-              ? await executeInstantWithMcp({
-                  baseUrl,
-                  apiKey,
-                  serverUrl: mcpServerUrl!,
-                  authToken: mcpServerAuthToken,
-                  mode,
-                  analysis: instantAnalysis,
-                  history: body.history,
-                  globalMemory,
-                  sessionSummary:
-                    instantAnalysis.contextDependencyScore < HIGH_CONTEXT_THRESHOLD
-                      ? sessionSummary
-                      : undefined,
-                  tools: availableMcpTools,
-                  currentSessionKey,
-                  modelId: mode.majorModel,
-                  reasoningMode: instantReasoningMode,
-                  slotId: instantSlotId,
-                  timeContext: requestTimeContext,
-                  signal: request.signal,
-                  onProgress: (status) => {
-                    if (request.signal.aborted) {
-                      return
-                    }
-
-                    send({
-                      type: "phase",
-                      phase: {
-                        id: "instant-response",
-                        label: "Constructing response",
-                        status: "active",
-                        summary: status,
-                        detail: status,
-                        modelId: mode.majorModel,
-                        lane: instantLane,
-                        reasoningMode: instantReasoningMode,
-                      },
-                    })
-                  },
-                  onToken: (text) => {
-                    if (!request.signal.aborted) {
-                      instantAnswer += text
-                      send({ type: "token", text })
-                    }
-                  },
-                })
-              : await streamChatCompletion({
-                  baseUrl,
-                  apiKey,
-                  model: mode.majorModel,
-                  temperature: EXECUTION_TEMPERATURE,
-                  enableThinking: instantReasoningMode === "think",
-                  slotId: instantSlotId,
-                  signal: request.signal,
-                  messages: buildInstantMessages({
-                    mode,
-                    analysis: instantAnalysis,
-                    history: body.history,
-                    globalMemory,
-                    sessionSummary:
-                      instantAnalysis.contextDependencyScore < HIGH_CONTEXT_THRESHOLD
-                        ? sessionSummary
-                        : undefined,
-                    tools: availableMcpTools,
-                    currentSessionKey,
-                    timeContext: requestTimeContext,
-                  }),
-                  onToken: (text) => {
-                    if (!request.signal.aborted) {
-                      instantAnswer += text
-                      send({ type: "token", text })
-                    }
-                  },
-                  emitReasoningToOutput: false,
-                })
-
-          const instantToolUses =
-            "toolUses" in instantCompletion && Array.isArray(instantCompletion.toolUses)
-              ? instantCompletion.toolUses
-              : []
-
-          const instantCompletionText =
-            "text" in instantCompletion &&
-            typeof instantCompletion.text === "string"
-              ? instantCompletion.text.trim()
-              : ""
-
-          if (usingInstantMcp && !instantAnswer && instantCompletionText) {
-            instantAnswer = instantCompletionText
-            if (!request.signal.aborted) {
-              send({ type: "token", text: instantAnswer })
-            }
-          }
-
-          if (!usingInstantMcp && instantCompletionText) {
-            instantAnswer = instantCompletionText
-            if (instantAnswer && !request.signal.aborted) {
-              send({ type: "token", text: instantAnswer })
-            }
-          }
-
-          if (!request.signal.aborted) {
-            send({
-              type: "phase",
-              phase: {
-                id: "instant-response",
-                label: "Constructing response",
-                status: "completed",
-                summary: summarizeToolUsesForPhaseSummary(instantToolUses) || undefined,
-                detail: normalizePhaseDetail(
-                  [
-                    instantToolUses.length > 0
-                      ? "Instant response completed with native tool use."
-                      : "Instant response completed.",
-                    formatToolUsesForPhaseDetail(instantToolUses),
-                  ]
-                    .filter(Boolean)
-                    .join("\n\n")
-                ),
-                modelId: instantCompletion.model,
-                lane: instantLane,
-                reasoningMode: instantReasoningMode,
-                metrics: nativeSlotControlEnabled
-                  ? instantCompletion.metrics
-                  : undefined,
-              },
-            })
-
-            const summaryReasoningMode = selectReasoningMode({
-              mode,
-              modelId: mode.majorModel,
-              lane: "contextual",
-              difficultyScore: instantAnalysis.difficultyScore,
-              contextDependencyScore: instantAnalysis.contextDependencyScore,
-              phaseKind: "summary",
-            })
-            const housekeepingSlotId = nativeSlotControlEnabled
-              ? majorContextualSlotId
-              : undefined
-            const housekeepingLane = "contextual" as const
-
-            send({
-              type: "phase",
-              phase: {
-                id: "session-summary",
-                label: "Preparing session summary",
-                status: "active",
-                detail: "Preparing a compact session snapshot for the next user turn.",
-                modelId: mode.majorModel,
-                lane: housekeepingLane,
-                reasoningMode: summaryReasoningMode,
-              },
-            })
-
-            try {
-              const nextSessionSummary = await createNextTurnSessionSummaryWithRetry({
-                baseUrl,
-                apiKey,
-                mode,
-                history: body.history,
-                analysis: instantAnalysis,
-                latestUserSummary: message,
-                finalAnswer: instantAnswer,
-                stepResults: [],
-                globalMemory,
-                sessionSummary,
-                tools: availableMcpTools,
-                currentSessionKey,
-                signal: request.signal,
-                enableThinking: summaryReasoningMode === "think",
-                slotId: housekeepingSlotId,
-              })
-              if (!request.signal.aborted) {
-                send({
-                  type: "phase",
-                  phase: {
-                    id: "session-summary",
-                    label: "Preparing session summary",
-                    status: "completed",
-                    detail: nextSessionSummary.summary,
-                    modelId: nextSessionSummary.model,
-                    lane: housekeepingLane,
-                    reasoningMode: summaryReasoningMode,
-                    metrics: nativeSlotControlEnabled
-                      ? nextSessionSummary.metrics
-                      : undefined,
-                  },
-                })
-                send({
-                  type: "session_summary",
-                  summary: {
-                    text: nextSessionSummary.summary,
-                    updatedAt: Date.now(),
-                  },
-                })
-              }
-            } catch (summaryError) {
-              const fallbackSummary = buildFallbackTurnSessionSummary(
-                body.history,
-                message
-              )
-              if (!request.signal.aborted) {
-                send({
-                  type: "phase",
-                  phase: {
-                    id: "session-summary",
-                    label: "Preparing session summary",
-                    status: "completed",
-                    summary: "Used fallback summary after the upstream summary request failed.",
-                    detail:
-                      summaryError instanceof Error
-                        ? `Upstream summary request failed: ${summaryError.message}\n\nFallback summary:\n${fallbackSummary}`
-                        : `Fallback summary:\n${fallbackSummary}`,
-                    modelId: mode.majorModel,
-                    lane: housekeepingLane,
-                    reasoningMode: summaryReasoningMode,
-                  },
-                })
-                send({
-                  type: "session_summary",
-                  summary: {
-                    text: fallbackSummary,
-                    updatedAt: Date.now(),
-                  },
-                })
-              }
-            }
-
-            const globalMemoryReasoningMode = selectReasoningMode({
-              mode,
-              modelId: mode.majorModel,
-              lane: housekeepingLane,
-              difficultyScore: instantAnalysis.difficultyScore,
-              contextDependencyScore: instantAnalysis.contextDependencyScore,
-              phaseKind: "memory",
-            })
-
-            send({
-              type: "phase",
-              phase: {
-                id: "global-memory",
-                label: "Updating global memory",
-                status: "active",
-                detail: hasGlobalMemory(globalMemory)
-                  ? "Refreshing cross-session memory with the latest turn."
-                  : "Creating the first cross-session memory entries.",
-                modelId: mode.majorModel,
-                lane: housekeepingLane,
-                reasoningMode: globalMemoryReasoningMode,
-              },
-            })
-
-            try {
-              const nextGlobalMemory = await updateGlobalMemory({
-                baseUrl,
-                apiKey,
-                mode,
-                history: body.history,
-                previousMemory: globalMemory,
-                currentSessionKey,
-                latestUserSummary: message,
-                finalAnswer: instantAnswer,
-                stepResults: [],
-                sessionSummary,
-                tools: availableMcpTools,
-                signal: request.signal,
-                enableThinking: globalMemoryReasoningMode === "think",
-                slotId: housekeepingSlotId,
-              })
-              if (!request.signal.aborted) {
-                send({
-                  type: "phase",
-                  phase: {
-                    id: "global-memory",
-                    label: "Updating global memory",
-                    status: "completed",
-                    detail: formatGlobalMemoryDetail(nextGlobalMemory.memory),
-                    modelId: nextGlobalMemory.model,
-                    lane: housekeepingLane,
-                    reasoningMode: globalMemoryReasoningMode,
-                    metrics: nativeSlotControlEnabled
-                      ? nextGlobalMemory.metrics
-                      : undefined,
-                  },
-                })
-                send({
-                  type: "global_memory",
-                  memory: nextGlobalMemory.memory,
-                })
-              }
-            } catch (memoryError) {
-              if (!request.signal.aborted) {
-                send({
-                  type: "phase",
-                  phase: {
-                    id: "global-memory",
-                    label: "Updating global memory",
-                    status: "error",
-                    detail:
-                      memoryError instanceof Error
-                        ? memoryError.message
-                        : "Failed to update global memory.",
-                    modelId: mode.majorModel,
-                    lane: housekeepingLane,
-                    reasoningMode: globalMemoryReasoningMode,
-                  },
-                })
-              }
-            }
-            send({ type: "done" })
-          }
-
+          await runInstantPath(instantAnalysis)
           return
         }
 
@@ -3774,7 +3509,7 @@ export async function POST(request: Request) {
             id: "problem-analysis",
             label: "Planning solutions",
             status: "active",
-            detail: "Scoring difficulty and context dependency for the multi-step path.",
+            detail: "Scoring difficulty and producing a structured analysis for the multi-step path.",
             modelId: mode.majorModel,
             lane: "contextual",
             reasoningMode: analysisReasoningMode,
@@ -3806,7 +3541,11 @@ export async function POST(request: Request) {
             id: "problem-analysis",
             label: "Planning solutions",
             status: "completed",
-            detail: `Difficulty ${analysis.difficultyScore}/100, context ${analysis.contextDependencyScore}/100. ${analysis.analysisSummary}`,
+            detail: `Difficulty ${analysis.difficultyScore}/100. ${analysis.analysisSummary}${
+              analysis.shouldUseMultiStep && analysis.recommendedStepCount >= 2
+                ? ` Recommended route: multi-step with ${analysis.recommendedStepCount} steps.`
+                : " Deeper analysis says a direct answer is sufficient, so the request will return to the instant path."
+            }`,
             modelId: analysisCompletion.model,
             lane: "contextual",
             reasoningMode: analysisReasoningMode,
@@ -3816,12 +3555,30 @@ export async function POST(request: Request) {
           },
         })
 
+        if (!analysis.shouldUseMultiStep || analysis.recommendedStepCount <= 1) {
+          send({
+            type: "meta",
+            meta: {
+              modeId: mode.id,
+              model: mode.majorModel,
+              route: "instant-major-lane",
+            },
+          })
+
+          await runInstantPath({
+            ...analysis,
+            shouldUseMultiStep: false,
+            recommendedStepCount: 1,
+          })
+
+          return
+        }
+
         const plannerReasoningMode = selectReasoningMode({
           mode,
           modelId: mode.majorModel,
           lane: "contextual",
           difficultyScore: analysis.difficultyScore,
-          contextDependencyScore: analysis.contextDependencyScore,
           phaseKind: "planner",
         })
 
@@ -3883,14 +3640,13 @@ export async function POST(request: Request) {
           const selectedExecution = selectModelAndLane(
             mode,
             step.difficultyScore,
-            step.contextDependencyScore
+            step.needsFullContext
           )
           const stepReasoningMode = selectReasoningMode({
             mode,
             modelId: selectedExecution.modelId,
             lane: selectedExecution.lane,
             difficultyScore: step.difficultyScore,
-            contextDependencyScore: step.contextDependencyScore,
             phaseKind: "step",
           })
 
@@ -4013,6 +3769,7 @@ export async function POST(request: Request) {
             globalMemory,
             sessionSummary,
             tools: availableMcpTools,
+            currentSessionKey,
             signal: request.signal,
           })
 
@@ -4060,17 +3817,16 @@ export async function POST(request: Request) {
           return
         }
 
-        const synthesisSelection = selectModelAndLane(
-          mode,
-          Math.max(analysis.difficultyScore, 60),
-          Math.max(analysis.contextDependencyScore, 70)
-        )
+        const synthesisSelection = {
+          modelId: mode.majorModel,
+          lane: "contextual" as const,
+          slotId: majorContextualSlotId,
+        }
         const synthesisReasoningMode = selectReasoningMode({
           mode,
           modelId: synthesisSelection.modelId,
           lane: synthesisSelection.lane,
           difficultyScore: Math.max(analysis.difficultyScore, 60),
-          contextDependencyScore: Math.max(analysis.contextDependencyScore, 70),
           phaseKind: "synthesis",
         })
         let synthesisAnswer = ""
@@ -4112,7 +3868,6 @@ export async function POST(request: Request) {
               mode,
               analysis,
               history: body.history,
-              lane: synthesisSelection.lane,
               globalMemory,
               currentSessionKey,
               latestUserSummary: message,
@@ -4150,7 +3905,6 @@ export async function POST(request: Request) {
             modelId: mode.majorModel,
             lane: "contextual",
             difficultyScore: analysis.difficultyScore,
-            contextDependencyScore: analysis.contextDependencyScore,
             phaseKind: "summary",
           })
           const housekeepingSlotId = nativeSlotControlEnabled
@@ -4171,6 +3925,8 @@ export async function POST(request: Request) {
             },
           })
 
+          let currentTurnSessionSummary = ""
+
           try {
             const nextSessionSummary = await createNextTurnSessionSummaryWithRetry({
               baseUrl,
@@ -4189,6 +3945,7 @@ export async function POST(request: Request) {
               enableThinking: summaryReasoningMode === "think",
               slotId: housekeepingSlotId,
             })
+            currentTurnSessionSummary = nextSessionSummary.summary
 
             if (!request.signal.aborted) {
               send({
@@ -4219,6 +3976,7 @@ export async function POST(request: Request) {
               body.history,
               message
             )
+            currentTurnSessionSummary = fallbackSummary
 
             if (!request.signal.aborted) {
               send({
@@ -4250,9 +4008,8 @@ export async function POST(request: Request) {
           const globalMemoryReasoningMode = selectReasoningMode({
             mode,
             modelId: mode.majorModel,
-            lane: housekeepingLane,
+            lane: "stateless",
             difficultyScore: analysis.difficultyScore,
-            contextDependencyScore: analysis.contextDependencyScore,
             phaseKind: "memory",
           })
 
@@ -4266,7 +4023,7 @@ export async function POST(request: Request) {
                 ? "Refreshing cross-session memory with the latest turn."
                 : "Creating the first cross-session memory entries.",
               modelId: mode.majorModel,
-              lane: housekeepingLane,
+              lane: "stateless",
               reasoningMode: globalMemoryReasoningMode,
             },
           })
@@ -4276,17 +4033,13 @@ export async function POST(request: Request) {
               baseUrl,
               apiKey,
               mode,
-              history: body.history,
               previousMemory: globalMemory,
               currentSessionKey,
               latestUserSummary: message,
-              finalAnswer: synthesisAnswer,
-              stepResults,
-              sessionSummary,
-              tools: availableMcpTools,
+              latestSessionSummary: currentTurnSessionSummary,
               signal: request.signal,
               enableThinking: globalMemoryReasoningMode === "think",
-              slotId: housekeepingSlotId,
+              slotId: majorStatelessSlotId,
             })
 
             if (!request.signal.aborted) {
@@ -4298,7 +4051,7 @@ export async function POST(request: Request) {
                   status: "completed",
                   detail: formatGlobalMemoryDetail(nextGlobalMemory.memory),
                   modelId: nextGlobalMemory.model,
-                  lane: housekeepingLane,
+                  lane: "stateless",
                   reasoningMode: globalMemoryReasoningMode,
                   metrics: nativeSlotControlEnabled
                     ? nextGlobalMemory.metrics
@@ -4323,7 +4076,7 @@ export async function POST(request: Request) {
                       ? memoryError.message
                       : "Failed to update global memory.",
                   modelId: mode.majorModel,
-                  lane: housekeepingLane,
+                  lane: "stateless",
                   reasoningMode: globalMemoryReasoningMode,
                 },
               })

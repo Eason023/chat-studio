@@ -51,20 +51,20 @@ export function dedupeIntelligentMemoryEntries(
 ) {
   void _category
 
-  const dedupedByKey = new Map<string, IntelligentGlobalMemoryEntry>()
+  const dedupedByIdentity = new Map<string, IntelligentGlobalMemoryEntry>()
 
   for (const entry of [...entries].sort((left, right) => right.updatedAt - left.updatedAt)) {
     if (!entry.key || !entry.value) {
       continue
     }
 
-    const normalizedKey = entry.key.toLowerCase()
-    if (dedupedByKey.has(normalizedKey)) {
+    const normalizedIdentity = `${entry.key.toLowerCase()}\u0000${entry.value.toLowerCase()}`
+    if (dedupedByIdentity.has(normalizedIdentity)) {
       continue
     }
 
-    dedupedByKey.set(normalizedKey, entry)
+    dedupedByIdentity.set(normalizedIdentity, entry)
   }
 
-  return Array.from(dedupedByKey.values()).slice(0, GLOBAL_MEMORY_ENTRY_LIMIT)
+  return Array.from(dedupedByIdentity.values()).slice(0, GLOBAL_MEMORY_ENTRY_LIMIT)
 }

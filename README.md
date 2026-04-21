@@ -252,52 +252,52 @@ The intelligent path can:
 
 Terms used below:
 
-- `full-context path`
-  Uses the full chat history.
-- `compact path`
-  Uses a shorter prompt with only the local context it needs.
-- `reusable prefix`
-  The stable front of a prompt that can be reused more effectively across multiple high-context phases.
+- `major lane`
+  The fixed full-context stack: major model + tool catalog + cross-session memory except the current session key + full chat history.
+- `stateless step`
+  A cheaper substep that does not receive the full chat history.
+- `schema phase`
+  A phase that uses `json_schema` response formatting instead of prompt-only JSON instructions.
 
 The intelligent workflow is built around three ideas:
 
-- Put high-context work on the `full-context path`.
-- Use the `compact path` only when carrying the full session would be wasteful.
-- Move memory updates to after the answer so the live answer path stays focused on the current request.
+- Keep every user-facing answer on the `major lane`.
+- Let only substeps choose between `major lane` and `stateless step`.
+- Move session-note and global-memory updates to after the answer finishes.
 
 ### End-to-end timeline
 
 ```mermaid
 flowchart TD
   A["User turn"] --> B["Route the request
-  Decide: answer now or decompose"]
+  Schema phase"]
 
-  B -->|Direct path| C["Generate answer
-  May use tools"]
+  B -->|Instant| C["Generate answer on major lane
+  Full history + tools + filtered memory"]
   B -->|Multi-step path| D["Analyze the task
-  Produce structured understanding"]
+  Schema phase"]
 
   D --> E["Plan the work
-  Produce a small step list"]
+  Schema phase"]
   E --> F{"Does this step need
-  full conversation context?"}
+  full major-lane context?"}
 
-  F -->|Yes| G["Run on full-context path
-  Full history
-  Reusable prefix"]
-  F -->|No| H["Run on compact path
-  Compact prompt
-  Lower cost"]
+  F -->|Yes| G["Run step on major lane
+  Full history + tools + filtered memory"]
+  F -->|No| H["Run step as stateless
+  Session note + latest user content + prior step results"]
 
   G --> I["Normalize step results"]
   H --> I
 
-  I --> J["Synthesize final answer"]
+  I --> J["Synthesize final answer on major lane"]
   C --> K["Stream answer to UI"]
   J --> K
 
   K --> L["Create next-turn session note"]
-  L --> M["Refresh cross-session memory"]
+  L --> M["Refresh global memory on stateless slot
+  Full memory bank + latest request + latest session note
+  Schema phase"]
 ```
 
 This is a serial post-answer flow: the session note is prepared first, and the global memory refresh happens after that. They are related housekeeping stages, not parallel branches.
@@ -306,68 +306,78 @@ This is a serial post-answer flow: the session note is prepared first, and the g
 
 ```mermaid
 flowchart LR
-  A["Stable front
-  system prompt + fixed rule text + tool catalog"] --> B["Full chat history
-  complete session turns in backend message format"]
-  B --> C["Shared request context
-  request time + memory snapshot + previous-turn note + fixed note"]
-  C --> D["Phase-specific details
-  current phase instruction + local task details"]
-  D --> E["Full-context prompt"]
-  E["Compact front
-  task prompt + optional memory block + optional tools"] --> F["Shared step context
-  analysis summary + previous-turn note + latest user content"]
-  F --> G["Local window
-  short history window or none"]
-  G --> H["Step-specific details
-  current step title + objective + prior completed work"]
-  H --> I["Compact prompt"]
+  A["Major-lane front
+  contextual system prompt + tool catalog"] --> B["Shared long context
+  filtered cross-session memory + full chat history"]
+  B --> C["Phase tail
+  phase instruction + phase payload"]
+  C --> D["Major-lane prompt"]
+
+  E["Stateless front
+  step system prompt + filtered cross-session memory + tool catalog"] --> F["Shared stateless context
+  analysis summary + session note + latest user content"]
+  F --> G["Step tail
+  step objective + difficulty + prior step results"]
+  G --> H["Stateless-step prompt"]
 ```
 
 Prompt shape:
 
-- `Full-context prompt`
-  `Stable front -> Full chat history -> Shared request context -> Phase-specific details`
-- `Compact prompt`
-  `Compact front -> Shared step context -> Local window -> Step-specific details`
+- `Major-lane prompt`
+  `contextual system prompt + tool catalog -> filtered cross-session memory + full chat history -> phase instruction + phase payload`
+- `Stateless-step prompt`
+  `step system prompt + filtered cross-session memory + tool catalog -> analysis summary + session note + latest user content -> step objective + prior step results`
 
 Where the reusable prefix comes from:
 
-- `Stable front`
-  `system prompt + fixed rule text + tool catalog`
-- `Full chat history`
-  `complete session turns in backend message format`
-- `Shared request context`
-  `request time + cross-session memory snapshot + previous-turn note + fixed note`
-- `Compact front`
-  `task prompt + optional memory block + optional tools`
-- `Shared step context`
-  `analysis summary + previous-turn note + latest user content`
+- `Major-lane front`
+  `contextual system prompt + tool catalog`
+- `Shared long context`
+  `cross-session memory excluding the current session key + full session history`
+- `Stateless front`
+  `step system prompt + filtered cross-session memory + tool catalog`
+- `Shared stateless context`
+  `analysis summary + previous-turn session note + latest user content`
 
 ```mermaid
 flowchart TD
-  A["Full-context prompt"] --> B["Usually reuses the long reusable prefix
-  Routing
-  Analysis
-  Planning
-  High-context execution
-  Synthesis
-  Next-turn note
-  Cross-session memory update"]
+  A["Major-lane prompt"] --> B["Long-prefix reuse
+  Routing gate
+  Multi-step analysis
+  Planner
+  Instant answer
+  Full-context substeps
+  Final synthesis
+  Session note"]
 
-  D["Compact prompt"] --> E["Reuses a smaller shared prefix
-  Compact step execution
-  Shared across substeps before the local window and step-specific details"]
+  C["Stateless-step prompt"] --> D["Shorter shared prefix
+  Stateless substeps only"]
 
-  A -.-> C["Sometimes reuses the long reusable prefix
-  Direct-answer generation
-  Step result normalization
-  Only when they stay on the full-context path"]
+  E["Memory-refresh prompt"] --> F["Independent stateless memory phase
+  Full memory bank including current session key
+  Latest request
+  Latest session note"]
 ```
 
-The long reusable prefix for high-context work is the front of the full-context prompt: `Stable front + Full chat history + Shared request context`.
+The long reusable prefix is the `major lane` stack. Final answers never drop out of it. Only substeps may choose the shorter stateless prompt shape.
 
-Compact substeps do not reuse that full long prefix, but they now share a smaller reusable front: `Compact front + Shared step context`. This means system instructions, tools, memory, previous-turn note, analysis summary, and latest user content stay aligned before each step's local window and step-specific details begin to diverge.
+The memory refresh phase is separate. It does not reuse the major-lane long prefix and it does not use the substep stateless prompt. It runs on the stateless slot with a dedicated memory-refresh prompt.
+
+There is no rolling history window in the current architecture. A substep either receives the whole major-lane stack or it receives the stateless step prompt.
+
+### Schema phases
+
+- `Routing gate`
+  Structured output: `shouldUseInstant`, `gateSummary`
+- `Multi-step analysis`
+  Structured output: `difficultyScore`, `shouldUseMultiStep`, `recommendedStepCount`, `taskType`, `analysisSummary`
+- `Planner`
+  Structured output: ordered steps with `id`, `title`, `objective`, `difficultyScore`, `needsFullContext`
+- `Step summary`
+  Structured output: `briefSummary`, `summary`
+- `Global memory refresh`
+  Structured output: `userFeatures`, `instructionMemory`, `recentEvents`
+  Input: full current memory bank, latest user request, latest session note
 
 ### System roles
 
@@ -376,32 +386,32 @@ Compact substeps do not reuse that full long prefix, but they now share a smalle
 - `Planner`
   Turns complex requests into a small number of focused steps instead of one large opaque generation.
 - `Executors`
-  Run each step on either the full-context path or the compact path depending on how much prior conversation matters.
+  Run each step either on the full major-lane stack or as a stateless step.
 - `Synthesizer`
-  Combines grounded step results into the final user-facing answer.
+  Combines grounded step results into the final user-facing answer on the major lane.
 - `Memory layer`
   Writes a short note for the next turn first, then updates cross-session memory after the answer is done.
 
 ### Operating principles
 
-- The full conversation is the authoritative state for full-context work.
+- The full conversation is the authoritative state for all major-lane work.
 - Complex requests are decomposed before execution, so the system can reason in smaller grounded steps.
-- The compact path is reserved for steps that do not need full-session continuity.
+- Only substeps are allowed to opt out of the full context stack.
 - Tool use is attached to the execution path, not treated as a separate architecture.
 - Post-answer memory work is sequential and isolated from answer generation.
 
 ### What stays stable across turns
 
 - The overall pipeline shape: route, optionally decompose, execute, synthesize, then update memory.
-- The full-context path used by the major high-context phases.
+- The major-lane prompt shape used by all user-facing answer phases.
 - The separation between live reasoning and post-answer memory maintenance.
 
 ### What changes across turns
 
 - The conversation itself grows.
 - Some requests stay simple and take the direct path; others branch into multi-step execution.
-- Some answer and cleanup phases stay on the full-context path, while others drop to the compact path when continuity is unnecessary.
-- Tools, retrieved facts, and memory contents change the later parts of the workflow.
+- Substeps may switch between major-lane execution and stateless execution.
+- Tools, retrieved facts, and cross-session memory contents change the later parts of the workflow.
 - The exact plan, execution results, and final synthesis depend on the current request.
 
 ## Dependencies
