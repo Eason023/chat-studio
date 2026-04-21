@@ -3,26 +3,25 @@
 ![Chat Studio Preview](./media/Chat-Studio.png)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
-Chat Studio is a full-stack multimodal chat workspace built with Next.js on top of OpenAI-compatible backends.
+Chat Studio is a next-generation chat workspace that brings server-side AI orchestration and cross-session memory to OpenAI-compatible backends.
+
+It combines a conventional manually controlled chat UI with a session-oriented intelligent workflow, so you can keep a familiar chat experience while adding server-side routing, structured multi-step execution, and traceable orchestration.
 
 The app now ships with two workflows in one interface:
 
 - `Legacy Custom Mode`: free-form chat, compare mode, structured extraction, and manual model controls.
 - `Intelligent Mode (v2)`: deployer-defined modes, server-side orchestration, session-aware traces, cross-session memory, and optional MCP tool usage.
 
-## Highlights
+## Why Chat Studio Is Different
 
-- Dual-workspace app with a runtime switch between legacy chat and intelligent modes
-- Responsive desktop and mobile layout for both legacy and intelligent workspaces
-- Streaming chat with image and PDF attachments
-- Markdown, GitHub-flavored tables, and KaTeX math rendering
-- Regenerate and Edit & Resend flows in both legacy and intelligent usage paths
-- Local browser persistence through IndexedDB and `localStorage`
-- Structured output mode with Schema Workspace and JSON / CSV export
-- Intelligent orchestration traces with route, lane, reasoning mode, and phase metrics
-- Session summaries plus editable three-tier cross-session memory in intelligent mode
-- Optional MCP integration with Streamable HTTP and FastMCP-style SSE transports
-- Standalone Docker deployment for production
+- Two workflows in one UI: a manual `Legacy Custom Mode` and a server-orchestrated `Intelligent Mode`
+- A session-oriented `major lane` design that keeps final answers on one full-context stack while allowing cheaper stateless substeps when full history is unnecessary
+- Per-turn orchestration traces with route, lane, think mode, and llama-server KV / PP / TG metrics
+- Cross-session memory with three editable tiers plus a next-turn session note for stateless recovery
+- Config-driven intelligent modes with model routing based on relative model weight and optional MCP tool integration
+- Responsive desktop/mobile UI and standalone Docker deployment
+
+It also includes a solid set of practical features such as image/PDF attachments, Markdown and LaTeX rendering, regenerate and edit-resend flows, local browser persistence, and structured export for legacy schema mode.
 
 ## Quick Start
 
