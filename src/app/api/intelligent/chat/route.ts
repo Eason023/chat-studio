@@ -130,9 +130,10 @@ type JsonSchemaResponseFormat = {
 
 type ProblemAnalysis = {
   difficultyScore: number
-  shouldUseMultiStep: boolean
   recommendedStepCount: number
   taskType: string
+  groundingNeed: "low" | "medium" | "high"
+  complexityFactors: string[]
   analysisSummary: string
 }
 
@@ -147,6 +148,7 @@ type PlannedStep = {
   objective: string
   difficultyScore: number
   needsFullContext: boolean
+  groundingNeed: "low" | "medium" | "high"
 }
 
 type StepExecutionResult = {
@@ -166,22 +168,23 @@ type StepToolUseRecord = {
   isError: boolean
 }
 
-const ANALYSIS_TEMPERATURE = 0
-const EXECUTION_TEMPERATURE = 0.2
-const ANALYSIS_MAX_TOKENS = 400
-const PLANNER_MAX_TOKENS = 700
-const STEP_MAX_TOKENS = 4096
-const STEP_SUMMARY_MAX_TOKENS = 1200
+const ANALYSIS_TEMPERATURE = 0.1
+const EXECUTION_TEMPERATURE = 0.3
+const GATE_MAX_TOKENS = 180
+const ANALYSIS_MAX_TOKENS = 520
+const PLANNER_MAX_TOKENS = 1400
+const STEP_MAX_TOKENS = 8192
+const STEP_SUMMARY_MAX_TOKENS = 4096
 const GLOBAL_MEMORY_MAX_TOKENS = 420
-const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 6000
-const MULTI_STEP_THRESHOLD = 58
+const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 8000
+const MULTI_STEP_THRESHOLD = 64
 const SESSION_CAPSULE_CHAR_LIMIT = 1400
 const MAX_STEP_TOOL_CALLS = 4
 const USER_FEATURE_MEMORY_LIMIT = 12
 const INSTRUCTION_MEMORY_LIMIT = 12
 const RECENT_EVENT_MEMORY_LIMIT = 10
-const THINKING_DIFFICULTY_FLOOR = 88
-const THINKING_SCORE_THRESHOLD = 92
+const THINKING_DIFFICULTY_FLOOR = 92
+const THINKING_SCORE_THRESHOLD = 98
 const DIFFICULTY_RUBRIC = [
   "Difficulty scoring rubric:",
   "0-20: greetings, simple factual questions, trivial formatting, or direct one-shot requests.",
@@ -264,13 +267,13 @@ function clampScore(value: unknown, fallback: number) {
 
 function clampCount(value: unknown, fallback: number) {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(1, Math.min(4, Math.round(value)))
+    return Math.max(1, Math.min(10, Math.round(value)))
   }
 
   if (typeof value === "string") {
     const parsed = Number(value)
     if (Number.isFinite(parsed)) {
-      return Math.max(1, Math.min(4, Math.round(parsed)))
+      return Math.max(1, Math.min(10, Math.round(parsed)))
     }
   }
 
@@ -281,6 +284,57 @@ function asString(value: unknown, fallback = "") {
   if (typeof value !== "string") return fallback
   const trimmed = value.trim()
   return trimmed || fallback
+}
+
+function normalizeGroundingNeed(
+  value: unknown,
+  fallback: "low" | "medium" | "high" = "low"
+) {
+  const normalized = asString(value).toLowerCase()
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized
+  }
+
+  return fallback
+}
+
+function normalizeStringArray(
+  value: unknown,
+  maxItems = 6,
+  fallback: string[] = []
+) {
+  if (!Array.isArray(value)) {
+    return fallback
+  }
+
+  return value
+    .map((item) => asString(item))
+    .filter(Boolean)
+    .slice(0, maxItems)
+}
+
+function estimateRecommendedStepCount(
+  difficultyScore: number,
+  groundingNeed: "low" | "medium" | "high",
+  complexityFactorCount = 0
+) {
+  let count = 2
+
+  if (difficultyScore >= 72) count += 1
+  if (difficultyScore >= 82) count += 1
+  if (difficultyScore >= 90) count += 1
+  if (difficultyScore >= 96) count += 1
+
+  if (groundingNeed === "medium") count += 1
+  if (groundingNeed === "high") count += 2
+
+  count += Math.min(3, Math.max(0, complexityFactorCount - 1))
+
+  return Math.max(2, Math.min(10, count))
 }
 
 function asNumber(value: unknown) {
@@ -590,14 +644,20 @@ function formatMessagePartsForPrompt(parts: MessagePart[]) {
 }
 
 function buildStepSharedRequestContext(args: {
-  analysisSummary: string
+  analysis: ProblemAnalysis
   latestUserContentText: string
   sessionSummary?: string
   includeSessionSummary?: boolean
 }) {
   return [
-    "Shared request context:",
-    `Global analysis summary: ${args.analysisSummary}`,
+    "Shared stateless request context:",
+    `Global analysis summary: ${args.analysis.analysisSummary}`,
+    `Overall grounding need: ${args.analysis.groundingNeed}`,
+    args.analysis.complexityFactors.length > 0
+      ? `Primary complexity factors:\n- ${args.analysis.complexityFactors.join(
+          "\n- "
+        )}`
+      : "",
     args.includeSessionSummary
       ? `Previous-turn session note:\n${
           args.sessionSummary || "No previous-turn session note is available."
@@ -618,6 +678,7 @@ function buildStepSpecificContext(args: {
     `Step title: ${args.step.title}`,
     `Step objective: ${args.step.objective}`,
     `Step difficulty score: ${args.step.difficultyScore}/100`,
+    `Step grounding need: ${args.step.groundingNeed}`,
     `Step needs full major-lane context: ${args.step.needsFullContext ? "yes" : "no"}`,
     `Prior completed work:\n${args.priorResultsBlock}`,
     "Return a concise execution summary with the main findings and what should matter to the final synthesis.",
@@ -634,9 +695,13 @@ function buildStepSummaryContext(args: {
     "Completed step details:",
     `Step title: ${args.step.title}`,
     `Step objective: ${args.step.objective}`,
+    `Step grounding need: ${args.step.groundingNeed}`,
     `Analysis summary: ${args.analysisSummary}`,
     "Convert the raw step work into a clean structured summary.",
     "Do not repeat chain-of-thought, scratch work, or self-talk.",
+    "The summary must preserve the core result of the step and the key process, method, or reasoning path that produced that result whenever later steps or final synthesis would need it.",
+    "If this step derived a proof, debugging path, implementation plan, comparison rationale, or decision method, include the important intermediate logic or procedure, not just the bottom-line conclusion.",
+    "Write the summary so later steps and final synthesis can rely on it without rereading the raw execution text.",
     args.toolUses?.length
       ? `Actual MCP tool calls completed in this step:\n${args.toolUses
           .map(
@@ -753,6 +818,38 @@ function buildContextualPhaseMessages(args: {
   ]
 }
 
+function buildStatelessPhaseMessages(args: {
+  mode: IntelligentModeConfig
+  phaseInstruction: string
+  sharedContext?: string
+  phaseContext?: string[]
+  globalMemory?: IntelligentGlobalMemory
+  tools?: McpTool[]
+  currentSessionKey?: string
+  timeContext?: string
+}) {
+  return [
+    buildLeadingSystemMessage({
+      base: createStepSystemPrompt(args.mode),
+      globalMemory: args.globalMemory,
+      currentSessionKey: args.currentSessionKey,
+      tools: args.tools,
+    }),
+    {
+      role: "user" as const,
+      content: [
+        "Stateless phase envelope.",
+        args.timeContext ?? getCurrentTimeContext(),
+        args.sharedContext ?? "",
+        args.phaseInstruction,
+        ...(args.phaseContext ?? []),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    },
+  ]
+}
+
 function buildJsonSchemaResponseFormat(
   name: string,
   schema: UnknownRecord
@@ -800,32 +897,41 @@ function buildAnalysisResponseFormat() {
         description:
           "Overall task difficulty from 0 to 100 based on the provided difficulty rubric.",
       },
-      shouldUseMultiStep: {
-        type: "boolean",
-        description:
-          "True only when at least two distinct internal steps would materially improve answer quality over an instant answer.",
-      },
       recommendedStepCount: {
         type: "number",
         description:
-          "Recommended number of plan steps from 1 to 4. Use 1 when direct answer should be enough even after deeper analysis. Use 2 or more only when the steps are meaningfully distinct.",
+          "Recommended number of execution steps from 2 to 10. Base this mainly on how many distinct concerns, evidence-gathering stages, or solution phases the request requires.",
       },
       taskType: {
         type: "string",
         description:
-          "Short task label such as general, coding, analysis, math, writing, or research.",
+          "Short task label such as general, coding, proof, project-analysis, math, writing, research, or debugging.",
+      },
+      groundingNeed: {
+        type: "string",
+        description:
+          "How strongly the overall request depends on verification, external grounding, or evidence collection: low, medium, or high.",
+      },
+      complexityFactors: {
+        type: "array",
+        description:
+          "Short phrases describing the main considerations that make this request complex, such as proof obligations, project-wide dependencies, multiple constraints, or verification needs.",
+        items: {
+          type: "string",
+        },
       },
       analysisSummary: {
         type: "string",
         description:
-          "Compact explanation of what the user is asking and why the chosen route makes sense.",
+          "Compact explanation of what the user is asking and what makes the multi-step route necessary.",
       },
     },
     required: [
       "difficultyScore",
-      "shouldUseMultiStep",
       "recommendedStepCount",
       "taskType",
+      "groundingNeed",
+      "complexityFactors",
       "analysisSummary",
     ],
     additionalProperties: false,
@@ -843,7 +949,7 @@ function buildPlannerResponseFormat() {
         description:
           "Ordered plan steps for a true multi-step request. Keep the count minimal, but do not collapse the plan into a single step.",
         minItems: 2,
-        maxItems: 4,
+        maxItems: 10,
         items: {
           type: "object",
           description: "One planned step in execution order.",
@@ -865,12 +971,17 @@ function buildPlannerResponseFormat() {
             difficultyScore: {
               type: "number",
               description:
-                "Step difficulty from 0 to 100 for model and reasoning routing.",
+                "Step difficulty from 0 to 100 for model routing and think gating.",
             },
             needsFullContext: {
               type: "boolean",
               description:
                 "True only when this step must run on the fixed major-lane context stack with tools, cross-session memory, and the full session history.",
+            },
+            groundingNeed: {
+              type: "string",
+              description:
+                "How strongly this step depends on verification, external grounding, or tool-backed evidence: low, medium, or high.",
             },
           },
           required: [
@@ -879,6 +990,7 @@ function buildPlannerResponseFormat() {
             "objective",
             "difficultyScore",
             "needsFullContext",
+            "groundingNeed",
           ],
           additionalProperties: false,
         },
@@ -1343,8 +1455,10 @@ function createRoutingGateSystemPrompt() {
     "Current orchestration phase: direct-answer gate.",
     "Decide whether the latest user request can be answered immediately or should go to the multi-step path.",
     "Keep the judgment lightweight.",
+    "The gate must make the final route decision. Do not assume a later phase will re-route the request.",
     "Prefer instant whenever a direct response is sufficient, even if that direct response may still use tools or careful reasoning.",
     "Choose multi-step only when the work clearly benefits from at least two distinct internal steps such as investigate -> compare, inspect -> modify, or gather evidence -> synthesize.",
+    "Requests like proofs, broad project or codebase analysis, multi-file debugging, architecture tradeoff analysis, and verification-heavy research should strongly lean toward multi-step.",
     "If the work would effectively be one substantive action followed by the final answer, keep it on instant instead of forcing a one-step plan.",
     "gateSummary must be only one to three short sentences.",
     "gateSummary should briefly restate the user's intent and whether direct answer is enough.",
@@ -1354,12 +1468,13 @@ function createRoutingGateSystemPrompt() {
 function createAnalysisSystemPrompt() {
   return [
     "Current orchestration phase: detailed multi-step analysis.",
-    "The request has already been routed away from instant response.",
+    "The request has already been definitively routed to the multi-step path.",
     "Analyze the task in more depth so planning and model routing can be accurate.",
     DIFFICULTY_RUBRIC,
-    "Set shouldUseMultiStep to true only when at least two distinct internal steps would materially improve the answer.",
-    "If a single reasoning pass or a single tool-assisted pass is enough, set shouldUseMultiStep to false and recommendedStepCount to 1.",
-    "Use recommendedStepCount to reflect the smallest useful decomposition and avoid laundering instant work into a one-step plan.",
+    "Do not reconsider the route. The gate already decided that this request should use multi-step execution.",
+    "Use recommendedStepCount mainly to reflect how many distinct concerns, evidence-collection stages, or solution phases the request actually requires, typically between 2 and 10.",
+    "Higher step counts are appropriate for proofs, broad project analysis, complex debugging, architecture work, or verification-heavy research when there are genuinely multiple stages.",
+    "Keep complexityFactors concrete and short. They should explain what the planner must account for.",
   ].join(" ")
 }
 
@@ -1381,12 +1496,18 @@ function createPlannerSystemPrompt(analysis: ProblemAnalysis) {
   return [
     "Current orchestration phase: planner.",
     `The request difficulty score is ${analysis.difficultyScore}/100.`,
+    `Overall grounding need is ${analysis.groundingNeed}.`,
+    analysis.complexityFactors.length > 0
+      ? `Primary complexity factors: ${analysis.complexityFactors.join("; ")}.`
+      : "Primary complexity factors were not explicitly listed.",
     "Create the smallest useful step plan.",
     `Target ${analysis.recommendedStepCount} steps unless fewer are enough.`,
     "Do not create unnecessary steps.",
     "Do not output a one-step plan. If only one substantive step would be enough, this request should have stayed on the instant path instead of reaching the planner.",
+    "Use 2 to 10 steps. Add steps only when they correspond to genuinely distinct phases or concerns.",
     "When available MCP tools can reduce hallucination, fetch external facts, or verify the answer, prefer a plan that explicitly leaves room for those tool-backed steps.",
     "Set needsFullContext to true only when the step must run on the fixed major-lane context stack with tools, cross-session memory, and the full conversation history.",
+    "Set groundingNeed higher for verification-heavy or evidence-driven steps.",
   ].join(" ")
 }
 
@@ -1403,10 +1524,13 @@ function createNextTurnSessionSummarySystemPrompt(analysis: ProblemAnalysis) {
 
 function createStepSystemPrompt(mode: IntelligentModeConfig) {
   return [
-    `You are executing an internal step for Chat Studio Intelligent Mode "${mode.label}".`,
-    "Produce concise execution notes for orchestration, not the final user-facing answer.",
-    "Focus on findings, decisions, and unresolved constraints.",
-    "Shared request context and the current step details will be provided later in the user message.",
+    `You are the stateless execution lane for Chat Studio Intelligent Mode "${mode.label}".`,
+    `The current major lane model is "${mode.majorModel}".`,
+    "This lane is reserved for internal steps that do not need the full session history and should preserve a stable prompt prefix across stateless work.",
+    "Treat the shared request context and current step details as the authoritative local state for this stateless step.",
+    "The final user message will define the exact stateless phase such as execution or summary.",
+    "Do not produce the final user-facing answer unless the phase explicitly asks for it.",
+    "Focus on findings, decisions, grounded facts, and unresolved constraints.",
     "Before concluding the step, strongly consider using available tools whenever they can improve factual reliability or verify external information.",
     "If native tools are available in the API request and they would materially help, call them directly instead of describing pretend searches or pretend tool usage in prose.",
   ].join(" ")
@@ -1418,6 +1542,7 @@ function createStepSummarySystemPrompt(mode: IntelligentModeConfig) {
     "Return only the step conclusion, not hidden chain-of-thought.",
     "Completed step details and raw step work will be provided later in the user message.",
     "Produce a concise UI summary and a fuller reusable step conclusion.",
+    "The fuller summary must keep the step's essential result plus the important method, derivation path, proof structure, debugging path, or decision logic whenever that content matters downstream.",
   ].join(" ")
 }
 
@@ -1614,7 +1739,9 @@ function createSynthesisSystemPrompt(
     `The current major lane model is "${mode.majorModel}".`,
     `Analysis summary: ${analysis.analysisSummary}`,
     "This request was routed to the multi-step path.",
+    "Answer the user's actual request directly by using the original request together with the completed step results.",
     "Use the completed step results to craft the final answer.",
+    "When a step result contains an important derivation, proof method, debugging path, implementation rationale, or comparison logic that is necessary to answer well, carry that substance into the final answer instead of only giving the final verdict.",
     "Prefer grounded, tool-backed findings over unsupported recall whenever tool results are available.",
     "If completed steps used MCP tools, rely on those grounded results and present them naturally.",
     "Do not claim to be currently browsing, searching, or calling tools in the user-facing answer.",
@@ -1925,12 +2052,15 @@ async function streamChatCompletion(args: {
 
 function fallbackRoutingGate(message: string): RoutingGate {
   const heuristic = fallbackProblemAnalysis(message)
+  const shouldUseInstant =
+    heuristic.difficultyScore < MULTI_STEP_THRESHOLD &&
+    heuristic.recommendedStepCount <= 2
 
   return {
-    shouldUseInstant: !heuristic.shouldUseMultiStep,
-    gateSummary: heuristic.shouldUseMultiStep
-      ? "This request likely needs deeper planning instead of an immediate answer."
-      : "This request appears simple enough for a direct answer.",
+    shouldUseInstant,
+    gateSummary: shouldUseInstant
+      ? "This request appears simple enough for a direct answer."
+      : "This request likely needs deeper planning instead of an immediate answer.",
   }
 }
 
@@ -1961,16 +2091,23 @@ function fallbackProblemAnalysis(message: string): ProblemAnalysis {
     24,
     Math.min(84, Math.round(message.length / 8) + 18)
   )
-  const shouldUseMultiStep = difficultyScore >= MULTI_STEP_THRESHOLD
+  const groundingNeed =
+    difficultyScore >= 76 ? "high" : difficultyScore >= 58 ? "medium" : "low"
 
   return {
     difficultyScore,
-    shouldUseMultiStep,
-    recommendedStepCount: shouldUseMultiStep ? 2 : 1,
+    recommendedStepCount: estimateRecommendedStepCount(
+      difficultyScore,
+      groundingNeed
+    ),
     taskType: "general",
-    analysisSummary: shouldUseMultiStep
-      ? "Fallback analysis selected the multi-step path because the structured analysis response was unavailable."
-      : "Fallback analysis selected the instant path because the structured analysis response was unavailable.",
+    groundingNeed,
+    complexityFactors:
+      groundingNeed === "high"
+        ? ["Multiple non-trivial concerns require staged work."]
+        : ["The request benefits from staged decomposition."],
+    analysisSummary:
+      "Fallback analysis estimated difficulty and decomposition because the structured analysis response was unavailable.",
   }
 }
 
@@ -1980,23 +2117,19 @@ function parseProblemAnalysis(text: string, message: string): ProblemAnalysis {
   if (!isRecord(parsed)) {
     return fallbackProblemAnalysis(message)
   }
-
-  const shouldUseMultiStep =
-    typeof parsed.shouldUseMultiStep === "boolean"
-      ? parsed.shouldUseMultiStep
-      : false
+  const groundingNeed = normalizeGroundingNeed(parsed.groundingNeed, "medium")
+  const complexityFactors = normalizeStringArray(parsed.complexityFactors, 6, [])
   const parsedStepCount = clampCount(
     parsed.recommendedStepCount,
-    shouldUseMultiStep ? 2 : 1
+    estimateRecommendedStepCount(50, groundingNeed, complexityFactors.length)
   )
 
   return {
     difficultyScore: clampScore(parsed.difficultyScore, 50),
-    shouldUseMultiStep,
-    recommendedStepCount: shouldUseMultiStep
-      ? Math.max(2, parsedStepCount)
-      : 1,
+    recommendedStepCount: Math.max(2, parsedStepCount),
     taskType: asString(parsed.taskType, "general"),
+    groundingNeed,
+    complexityFactors,
     analysisSummary: asString(
       parsed.analysisSummary,
       "The model did not provide a detailed analysis summary."
@@ -2019,15 +2152,36 @@ function fallbackPlan(message: string, analysis: ProblemAnalysis): PlannedStep[]
       )}`,
       difficultyScore: Math.max(35, analysis.difficultyScore - 10),
       needsFullContext: false,
+      groundingNeed: analysis.groundingNeed,
     },
     {
       id: "step-2",
-      title: "Do the main work",
-      objective: "Develop the main reasoning, verification, or solution approach.",
+      title: "Collect or verify the key evidence",
+      objective:
+        "Gather the information, evidence, or tool-backed findings required before the main conclusion can be trusted.",
+      difficultyScore: Math.max(40, analysis.difficultyScore - 2),
+      needsFullContext: false,
+      groundingNeed: analysis.groundingNeed,
+    },
+    {
+      id: "step-3",
+      title: "Do the main reasoning",
+      objective:
+        "Analyze the gathered material and develop the core reasoning or solution approach.",
       difficultyScore: analysis.difficultyScore,
       needsFullContext: false,
+      groundingNeed: analysis.groundingNeed,
     },
-  ].slice(0, Math.max(2, Math.min(2, analysis.recommendedStepCount)))
+    {
+      id: "step-4",
+      title: "Cross-check important constraints",
+      objective:
+        "Review edge cases, conflicts, and constraints that could change the final answer.",
+      difficultyScore: Math.max(42, analysis.difficultyScore - 8),
+      needsFullContext: false,
+      groundingNeed: analysis.groundingNeed,
+    },
+  ].slice(0, Math.max(2, Math.min(4, analysis.recommendedStepCount)))
 }
 
 function parsePlan(
@@ -2059,10 +2213,14 @@ function parsePlan(
           typeof step.needsFullContext === "boolean"
             ? step.needsFullContext
             : false,
+        groundingNeed: normalizeGroundingNeed(
+          step.groundingNeed,
+          analysis.groundingNeed
+        ),
       }
     })
     .filter((step): step is PlannedStep => Boolean(step))
-    .slice(0, 4)
+    .slice(0, 10)
 
   return steps.length >= 2 ? steps : fallbackPlan(message, analysis)
 }
@@ -2124,10 +2282,45 @@ function getModelEntries(mode: IntelligentModeConfig) {
     .sort((left, right) => left.weight - right.weight)
 }
 
+function getGroundingBoost(groundingNeed: "low" | "medium" | "high") {
+  if (groundingNeed === "high") return 10
+  if (groundingNeed === "medium") return 4
+  return 0
+}
+
+function computeRoutingDemand(args: {
+  difficultyScore: number
+  groundingNeed: "low" | "medium" | "high"
+}) {
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      args.difficultyScore + getGroundingBoost(args.groundingNeed)
+    )
+  )
+}
+
+function getNormalizedWeightPosition(weight: number, minWeight: number, maxWeight: number) {
+  const safeMin = Math.max(minWeight, 0.0001)
+  const safeMax = Math.max(maxWeight, safeMin)
+  const safeWeight = Math.max(weight, safeMin)
+
+  if (safeMax === safeMin) {
+    return 1
+  }
+
+  return (
+    (Math.log(safeWeight) - Math.log(safeMin)) /
+    (Math.log(safeMax) - Math.log(safeMin))
+  )
+}
+
 function selectModelAndLane(
   mode: IntelligentModeConfig,
   difficultyScore: number,
-  needsFullContext: boolean
+  needsFullContext: boolean,
+  groundingNeed: "low" | "medium" | "high" = "low"
 ) {
   const entries = getModelEntries(mode)
   const majorEntry =
@@ -2143,13 +2336,29 @@ function selectModelAndLane(
     }
   }
 
-  let selected = majorEntry
+  const demand = computeRoutingDemand({
+    difficultyScore,
+    groundingNeed,
+  })
+  const targetPosition = demand / 100
+  const selected = entries.reduce((best, entry) => {
+    const position = getNormalizedWeightPosition(entry.weight, minWeight, maxWeight)
+    const delta = Math.abs(position - targetPosition)
 
-  const targetWeight =
-    minWeight + ((maxWeight - minWeight) * difficultyScore) / 100
+    if (!best) {
+      return { entry, delta }
+    }
 
-  selected =
-    entries.find((entry) => entry.weight >= targetWeight) ??
+    if (delta < best.delta) {
+      return { entry, delta }
+    }
+
+    if (delta === best.delta && entry.weight < best.entry.weight) {
+      return { entry, delta }
+    }
+
+    return best
+  }, null as { entry: (typeof entries)[number]; delta: number } | null)?.entry ??
     entries[entries.length - 1]
 
   const slotId =
@@ -2167,54 +2376,59 @@ function selectReasoningMode(args: {
   modelId: string
   lane: "contextual" | "stateless"
   difficultyScore: number
+  groundingNeed?: "low" | "medium" | "high"
   phaseKind: PhaseKind
 }): IntelligentReasoningMode {
-  const selectedWeight =
-    args.mode.models[args.modelId]?.weight ??
-    args.mode.models[args.mode.majorModel]?.weight ??
-    0
-  const majorWeight =
-    args.mode.models[args.mode.majorModel]?.weight ?? selectedWeight
-  const isMajorModel = args.modelId === args.mode.majorModel
-
-  if (args.difficultyScore < THINKING_DIFFICULTY_FLOOR) {
+  if (
+    args.phaseKind === "instant" ||
+    args.phaseKind === "summary" ||
+    args.phaseKind === "memory"
+  ) {
     return "instant"
   }
 
-  let score = args.difficultyScore
+  let score = computeRoutingDemand({
+    difficultyScore: args.difficultyScore,
+    groundingNeed: args.groundingNeed ?? "low",
+  })
+
+  const entries = getModelEntries(args.mode)
+  const currentWeight =
+    entries.find((entry) => entry.id === args.modelId)?.weight ??
+    entries[entries.length - 1]?.weight ??
+    1
+  const majorWeight =
+    entries.find((entry) => entry.id === args.mode.majorModel)?.weight ??
+    currentWeight
 
   if (args.lane === "contextual") {
-    score += 3
+    score += 8
+  } else {
+    score -= 2
   }
 
-  if (isMajorModel) {
-    score += 4
-  } else if (selectedWeight < majorWeight) {
-    score -= 14
+  if (currentWeight > majorWeight) {
+    score += 6
+  } else if (currentWeight < majorWeight) {
+    score -= 6
+  } else {
+    score += 2
   }
 
   if (args.phaseKind === "analysis" || args.phaseKind === "planner") {
-    score -= 14
-  }
-
-  if (args.phaseKind === "summary") {
-    score -= 18
-  }
-
-  if (args.phaseKind === "instant") {
-    score -= 10
+    score += 4
   }
 
   if (args.phaseKind === "synthesis") {
-    score -= 6
+    score += 4
   }
 
-  if (args.phaseKind === "memory") {
-    score -= 26
+  if (args.phaseKind === "step") {
+    score += 6
   }
 
-  if (args.phaseKind === "step" && args.lane === "stateless") {
-    score -= 8
+  if (score < THINKING_DIFFICULTY_FLOOR) {
+    return "instant"
   }
 
   return score >= THINKING_SCORE_THRESHOLD ? "think" : "instant"
@@ -2249,7 +2463,7 @@ function buildStepExecutionMessages(args: {
       : "No previous step results."
 
   const sharedRequestContextBlock = buildStepSharedRequestContext({
-    analysisSummary: args.analysis.analysisSummary,
+    analysis: args.analysis,
     latestUserContentText,
     sessionSummary: args.sessionSummary,
     includeSessionSummary: !usesMajorContextStack,
@@ -2275,24 +2489,17 @@ function buildStepExecutionMessages(args: {
     })
   }
 
-  return [
-    buildLeadingSystemMessage({
-      base: createStepSystemPrompt(args.mode),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
-    }),
-    {
-      role: "user" as const,
-      content: [
-        args.timeContext ?? getCurrentTimeContext(),
-        sharedRequestContextBlock,
-        stepSpecificContextBlock,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    },
-  ]
+  return buildStatelessPhaseMessages({
+    mode: args.mode,
+    globalMemory: args.globalMemory,
+    tools: args.tools,
+    currentSessionKey: args.currentSessionKey,
+    timeContext: args.timeContext,
+    sharedContext: sharedRequestContextBlock,
+    phaseInstruction:
+      "Current orchestration phase: execute a stateless internal step. Produce concise execution notes for orchestration, not the final user-facing answer.",
+    phaseContext: [stepSpecificContextBlock],
+  })
 }
 
 function buildInstantMessages(args: {
@@ -2358,6 +2565,8 @@ function buildSynthesisMessages(args: {
             }`
         )
         .join("\n\n"),
+      "Use the user's original request and the completed step results together when writing the final answer.",
+      "If a step result contains an essential method or reasoning path, preserve that substance whenever it is necessary to answer the user well.",
       "Write the final user-facing answer now.",
       "Only mention tool-backed facts when they are grounded in the completed step results above.",
     ],
@@ -2547,6 +2756,7 @@ async function createStructuredStepSummary(args: {
   sessionSummary?: string
   tools?: McpTool[]
   currentSessionKey?: string
+  timeContext?: string
   signal: AbortSignal
 }) {
   const responseFormat = buildJsonSchemaResponseFormat("step_summary", {
@@ -2561,7 +2771,7 @@ async function createStructuredStepSummary(args: {
       summary: {
         type: "string",
         description:
-          "The full step conclusion for later steps and final synthesis. Do not include hidden reasoning.",
+          "The reusable full step conclusion for later steps and final synthesis. Include the core result and any important method, derivation path, proof structure, debugging path, or decision logic that later phases would need, but do not expose hidden chain-of-thought.",
       },
     },
     required: ["briefSummary", "summary"],
@@ -2576,6 +2786,17 @@ async function createStructuredStepSummary(args: {
       toolUses: args.toolUses,
     }),
   ]
+  const latestHistoryItem = args.history[args.history.length - 1]
+  const latestUserContentText =
+    latestHistoryItem?.role === "user" && Array.isArray(latestHistoryItem.content)
+      ? formatMessagePartsForPrompt(latestHistoryItem.content)
+      : "No latest user content was included."
+  const statelessSharedContext = buildStepSharedRequestContext({
+    analysis: args.analysis,
+    latestUserContentText,
+    sessionSummary: args.sessionSummary,
+    includeSessionSummary: true,
+  })
 
   const messages: ProviderMessage[] =
     args.lane === "contextual"
@@ -2585,19 +2806,21 @@ async function createStructuredStepSummary(args: {
           globalMemory: args.globalMemory,
           tools: args.tools,
           currentSessionKey: args.currentSessionKey,
+          timeContext: args.timeContext,
           phaseInstruction:
             "Current orchestration phase: summarize a completed internal step.",
           phaseContext: summaryPromptContext,
         })
-      : [
-          buildLeadingSystemMessage({
-            base: createStepSummarySystemPrompt(args.mode),
-          }),
-          {
-            role: "user",
-            content: summaryPromptContext.join("\n\n"),
-          },
-        ]
+      : buildStatelessPhaseMessages({
+          mode: args.mode,
+          globalMemory: args.globalMemory,
+          tools: args.tools,
+          currentSessionKey: args.currentSessionKey,
+          timeContext: args.timeContext,
+          sharedContext: statelessSharedContext,
+          phaseInstruction: createStepSummarySystemPrompt(args.mode),
+          phaseContext: summaryPromptContext,
+        })
 
   const completion = await createChatCompletion({
     baseUrl: args.baseUrl,
@@ -3012,13 +3235,7 @@ export async function POST(request: Request) {
         ]
   const sessionSummary = trimPersistedSessionSummary(body.sessionSummary)
   const preAnalysisHeuristic = fallbackProblemAnalysis(message)
-  const analysisReasoningMode = selectReasoningMode({
-    mode,
-    modelId: mode.majorModel,
-    lane: "contextual",
-    difficultyScore: preAnalysisHeuristic.difficultyScore,
-    phaseKind: "analysis",
-  })
+  const routingReasoningMode: IntelligentReasoningMode = "instant"
 
   activeIntelligentRequest = true
 
@@ -3439,7 +3656,7 @@ export async function POST(request: Request) {
             detail: "Running a lightweight gate for instant versus multi-step.",
             modelId: mode.majorModel,
             lane: "contextual",
-            reasoningMode: analysisReasoningMode,
+            reasoningMode: routingReasoningMode,
           },
         })
 
@@ -3453,8 +3670,8 @@ export async function POST(request: Request) {
           tools: availableMcpTools,
           currentSessionKey,
           model: mode.majorModel,
-          maxTokens: ANALYSIS_MAX_TOKENS,
-          enableThinking: analysisReasoningMode === "think",
+          maxTokens: GATE_MAX_TOKENS,
+          enableThinking: false,
           slotId: majorContextualSlotId,
           timeContext: requestTimeContext,
           signal: request.signal,
@@ -3472,7 +3689,7 @@ export async function POST(request: Request) {
             detail: `${routingGate.gateSummary}\n\nRoute: ${route}.`,
             modelId: routingGateCompletion.model,
             lane: "contextual",
-            reasoningMode: analysisReasoningMode,
+            reasoningMode: routingReasoningMode,
             metrics: nativeSlotControlEnabled
               ? routingGateCompletion.metrics
               : undefined,
@@ -3493,7 +3710,6 @@ export async function POST(request: Request) {
 
         const instantAnalysis: ProblemAnalysis = {
           ...preAnalysisHeuristic,
-          shouldUseMultiStep: false,
           recommendedStepCount: 1,
           analysisSummary: routingGate.gateSummary,
         }
@@ -3502,6 +3718,15 @@ export async function POST(request: Request) {
           await runInstantPath(instantAnalysis)
           return
         }
+
+        const analysisReasoningMode = selectReasoningMode({
+          mode,
+          modelId: mode.majorModel,
+          lane: "contextual",
+          difficultyScore: preAnalysisHeuristic.difficultyScore,
+          groundingNeed: preAnalysisHeuristic.groundingNeed,
+          phaseKind: "analysis",
+        })
 
         send({
           type: "phase",
@@ -3541,10 +3766,10 @@ export async function POST(request: Request) {
             id: "problem-analysis",
             label: "Planning solutions",
             status: "completed",
-            detail: `Difficulty ${analysis.difficultyScore}/100. ${analysis.analysisSummary}${
-              analysis.shouldUseMultiStep && analysis.recommendedStepCount >= 2
-                ? ` Recommended route: multi-step with ${analysis.recommendedStepCount} steps.`
-                : " Deeper analysis says a direct answer is sufficient, so the request will return to the instant path."
+            detail: `Difficulty ${analysis.difficultyScore}/100. Grounding need: ${analysis.groundingNeed}. Recommended steps: ${analysis.recommendedStepCount}. ${analysis.analysisSummary}${
+              analysis.complexityFactors.length > 0
+                ? ` Complexity factors: ${analysis.complexityFactors.join("; ")}.`
+                : ""
             }`,
             modelId: analysisCompletion.model,
             lane: "contextual",
@@ -3555,30 +3780,12 @@ export async function POST(request: Request) {
           },
         })
 
-        if (!analysis.shouldUseMultiStep || analysis.recommendedStepCount <= 1) {
-          send({
-            type: "meta",
-            meta: {
-              modeId: mode.id,
-              model: mode.majorModel,
-              route: "instant-major-lane",
-            },
-          })
-
-          await runInstantPath({
-            ...analysis,
-            shouldUseMultiStep: false,
-            recommendedStepCount: 1,
-          })
-
-          return
-        }
-
         const plannerReasoningMode = selectReasoningMode({
           mode,
           modelId: mode.majorModel,
           lane: "contextual",
           difficultyScore: analysis.difficultyScore,
+          groundingNeed: analysis.groundingNeed,
           phaseKind: "planner",
         })
 
@@ -3640,13 +3847,15 @@ export async function POST(request: Request) {
           const selectedExecution = selectModelAndLane(
             mode,
             step.difficultyScore,
-            step.needsFullContext
+            step.needsFullContext,
+            step.groundingNeed
           )
           const stepReasoningMode = selectReasoningMode({
             mode,
             modelId: selectedExecution.modelId,
             lane: selectedExecution.lane,
             difficultyScore: step.difficultyScore,
+            groundingNeed: step.groundingNeed,
             phaseKind: "step",
           })
 
@@ -3656,7 +3865,7 @@ export async function POST(request: Request) {
               id: step.id,
               label: step.title,
               status: "active",
-              detail: `${step.objective} [${selectedExecution.modelId}, ${selectedExecution.lane}]`,
+              detail: `${step.objective} [${selectedExecution.modelId}, ${selectedExecution.lane}, grounding ${step.groundingNeed}]`,
               modelId: selectedExecution.modelId,
               lane: selectedExecution.lane,
               reasoningMode: stepReasoningMode,
@@ -3770,6 +3979,7 @@ export async function POST(request: Request) {
             sessionSummary,
             tools: availableMcpTools,
             currentSessionKey,
+            timeContext: requestTimeContext,
             signal: request.signal,
           })
 
@@ -3827,6 +4037,7 @@ export async function POST(request: Request) {
           modelId: synthesisSelection.modelId,
           lane: synthesisSelection.lane,
           difficultyScore: Math.max(analysis.difficultyScore, 60),
+          groundingNeed: analysis.groundingNeed,
           phaseKind: "synthesis",
         })
         let synthesisAnswer = ""
