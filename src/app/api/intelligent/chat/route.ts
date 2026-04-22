@@ -185,6 +185,7 @@ const INSTRUCTION_MEMORY_LIMIT = 12
 const RECENT_EVENT_MEMORY_LIMIT = 10
 const THINKING_DIFFICULTY_FLOOR = 92
 const THINKING_SCORE_THRESHOLD = 98
+const SMALL_MAJOR_STATELESS_PROMOTION_BIAS = 8
 const DIFFICULTY_RUBRIC = [
   "Difficulty scoring rubric:",
   "0-20: greetings, simple factual questions, trivial formatting, or direct one-shot requests.",
@@ -300,6 +301,77 @@ function normalizeGroundingNeed(
   }
 
   return fallback
+}
+
+function compareGroundingNeed(
+  left: "low" | "medium" | "high",
+  right: "low" | "medium" | "high"
+) {
+  const rank = {
+    low: 0,
+    medium: 1,
+    high: 2,
+  } as const
+
+  return rank[left] - rank[right]
+}
+
+function maxGroundingNeed(
+  left: "low" | "medium" | "high",
+  right: "low" | "medium" | "high"
+) {
+  return compareGroundingNeed(left, right) >= 0 ? left : right
+}
+
+function getPlannerGroundingFloor(analysis: ProblemAnalysis) {
+  if (analysis.groundingNeed === "high") {
+    return "medium" as const
+  }
+
+  if (
+    analysis.groundingNeed === "medium" &&
+    analysis.difficultyScore >= 84
+  ) {
+    return "medium" as const
+  }
+
+  return "low" as const
+}
+
+function getPlannerDifficultyFloor(args: {
+  analysis: ProblemAnalysis
+  groundingNeed: "low" | "medium" | "high"
+}) {
+  const { analysis, groundingNeed } = args
+
+  if (analysis.difficultyScore >= 88 && analysis.groundingNeed === "high") {
+    if (groundingNeed === "high") return 64
+    if (groundingNeed === "medium") return 58
+    return 52
+  }
+
+  if (
+    analysis.difficultyScore >= 82 &&
+    compareGroundingNeed(analysis.groundingNeed, "medium") >= 0
+  ) {
+    if (groundingNeed === "high") return 58
+    if (groundingNeed === "medium") return 52
+    return 46
+  }
+
+  if (analysis.difficultyScore >= 74) {
+    if (groundingNeed === "high") return 52
+    if (groundingNeed === "medium") return 46
+    return 40
+  }
+
+  return 0
+}
+
+function formatStepRoutingSummary(step: PlannedStep) {
+  return `difficulty ${step.difficultyScore}/100, ${
+    step.needsFullContext ? "needs full context" : "stateless-ready"
+  }, grounding ${step.groundingNeed}`
 }
 
 function normalizeStringArray(
@@ -1011,17 +1083,17 @@ function buildPlannerResponseFormat() {
             difficultyScore: {
               type: "number",
               description:
-                "Step difficulty from 0 to 100 for model routing and think gating.",
+                "Step difficulty from 0 to 100 for model routing and think gating. Score the true reasoning, proof, verification, or investigation burden of the step, not just how briefly the step can be named.",
             },
             needsFullContext: {
               type: "boolean",
               description:
-                "True only when this step must run on the fixed major-lane context stack with tools, cross-session memory, and the full session history.",
+                "True only when this step truly requires the fixed major-lane context stack with tools, cross-session memory, and the full session history. Leave it false when the latest user content, session note, prior step results, tool outputs, and memory are enough.",
             },
             groundingNeed: {
               type: "string",
               description:
-                "How strongly this step depends on verification, external grounding, or tool-backed evidence: low, medium, or high.",
+                "How strongly this step depends on verification, external grounding, or tool-backed evidence: low, medium, or high. Raise it when the step is evidence-heavy or must verify important claims.",
             },
           },
           required: [
@@ -1538,8 +1610,10 @@ function createPlannerSystemPrompt(analysis: ProblemAnalysis) {
     "Do not output a one-step plan. If only one substantive step would be enough, this request should have stayed on the instant path instead of reaching the planner.",
     "Use 2 to 10 steps. Add steps only when they correspond to genuinely distinct phases or concerns.",
     "When available MCP tools can reduce hallucination, fetch external facts, or verify the answer, prefer a plan that explicitly leaves room for those tool-backed steps.",
-    "Set needsFullContext to true only when the step must run on the fixed major-lane context stack with tools, cross-session memory, and the full conversation history.",
-    "Set groundingNeed higher for verification-heavy or evidence-driven steps.",
+    "Set difficultyScore to reflect the true reasoning and verification burden of each step. Do not under-score proof, broad codebase investigation, architecture analysis, or evidence-heavy steps merely because their titles are short.",
+    "Be conservative with needsFullContext. Set it to true only when the step truly depends on unreduced full session history or exact prior-turn state that cannot be recovered from the latest user content, the session note, prior step results, tool outputs, or cross-session memory.",
+    "If the distilled context is sufficient, keep needsFullContext false so the step can stay stateless.",
+    "Set groundingNeed higher for verification-heavy or evidence-driven steps, especially when a wrong answer would be costly or when tool-backed evidence is central to the step.",
   ].join(" ")
 }
 
@@ -2264,20 +2338,28 @@ function parsePlan(
 
       const title = asString(step.title, `Step ${index + 1}`)
       const objective = asString(step.objective, title)
+      const groundingNeed = maxGroundingNeed(
+        normalizeGroundingNeed(step.groundingNeed, analysis.groundingNeed),
+        getPlannerGroundingFloor(analysis)
+      )
+      const difficultyScore = Math.max(
+        clampScore(step.difficultyScore, analysis.difficultyScore),
+        getPlannerDifficultyFloor({
+          analysis,
+          groundingNeed,
+        })
+      )
 
       return {
         id: asString(step.id, `step-${index + 1}`),
         title,
         objective,
-        difficultyScore: clampScore(step.difficultyScore, analysis.difficultyScore),
+        difficultyScore,
         needsFullContext:
           typeof step.needsFullContext === "boolean"
             ? step.needsFullContext
             : false,
-        groundingNeed: normalizeGroundingNeed(
-          step.groundingNeed,
-          analysis.groundingNeed
-        ),
+        groundingNeed,
       }
     })
     .filter((step): step is PlannedStep => Boolean(step))
@@ -2397,10 +2479,19 @@ function selectModelAndLane(
     }
   }
 
-  const demand = computeRoutingDemand({
+  let demand = computeRoutingDemand({
     difficultyScore,
     groundingNeed,
   })
+  const majorIsSmallest = majorEntry.weight === minWeight
+  const hasLargerAlternative = entries.some(
+    (entry) => entry.weight > majorEntry.weight
+  )
+
+  if (majorIsSmallest && hasLargerAlternative) {
+    demand = Math.min(100, demand + SMALL_MAJOR_STATELESS_PROMOTION_BIAS)
+  }
+
   const targetPosition = demand / 100
   const selected = entries.reduce((best, entry) => {
     const position = getNormalizedWeightPosition(entry.weight, minWeight, maxWeight)
@@ -3911,7 +4002,11 @@ export async function POST(request: Request) {
             id: "planner",
             label: "Planning steps",
             status: "completed",
-            detail: plannedSteps.map((step) => step.title).join(" -> "),
+            detail: plannedSteps
+              .map(
+                (step) => `${step.title} [${formatStepRoutingSummary(step)}]`
+              )
+              .join(" -> "),
             modelId: plannerCompletion.model,
             lane: "contextual",
             reasoningMode: plannerReasoningMode,
@@ -3947,7 +4042,7 @@ export async function POST(request: Request) {
               id: step.id,
               label: step.title,
               status: "active",
-              detail: `${step.objective} [${selectedExecution.modelId}, ${selectedExecution.lane}, grounding ${step.groundingNeed}]`,
+              detail: `${step.objective} [${selectedExecution.modelId}, ${selectedExecution.lane}, ${formatStepRoutingSummary(step)}]`,
               modelId: selectedExecution.modelId,
               lane: selectedExecution.lane,
               reasoningMode: stepReasoningMode,
@@ -4002,7 +4097,7 @@ export async function POST(request: Request) {
                         label: step.title,
                         status: "active",
                         summary: status,
-                        detail: status,
+                        detail: `${status}\n\nRouting: ${selectedExecution.modelId}, ${selectedExecution.lane}, ${formatStepRoutingSummary(step)}`,
                         modelId: selectedExecution.modelId,
                         lane: selectedExecution.lane,
                         reasoningMode: stepReasoningMode,
@@ -4093,6 +4188,7 @@ export async function POST(request: Request) {
                 .join(" "),
               detail: normalizePhaseDetail(
                 [
+                  `Routing: ${selectedExecution.modelId}, ${selectedExecution.lane}, ${formatStepRoutingSummary(step)}`,
                   result.summary,
                   formatToolUsesForPhaseDetail(stepToolUses),
                 ]

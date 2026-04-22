@@ -388,6 +388,7 @@ There is no rolling history window in the current architecture. A substep either
   Structured output: `difficultyScore`, `recommendedStepCount`, `taskType`, `groundingNeed`, `complexityFactors`, `analysisSummary`
 - `Planner`
   Structured output: ordered steps with `id`, `title`, `objective`, `difficultyScore`, `needsFullContext`, `groundingNeed`
+  The planner is intentionally conservative with `needsFullContext`: a step stays stateless unless it truly requires unreduced full-session state.
 - `Step summary`
   Structured output: `briefSummary`, `summary`
 - `Global memory refresh`
@@ -401,7 +402,7 @@ There is no rolling history window in the current architecture. A substep either
 - `Planner`
   Turns complex requests into a small number of focused steps instead of one large opaque generation.
 - `Executors`
-  Run each step either on the full major-lane stack or as a stateless step.
+  Run each step either on the full major-lane stack or as a stateless step. Stateless steps can still escalate to a larger model based on planned difficulty, grounding need, and configured model weights.
 - `Synthesizer`
   Combines grounded step results into the final user-facing answer on the major lane.
 - `Memory layer`
@@ -411,7 +412,7 @@ There is no rolling history window in the current architecture. A substep either
 
 - The full conversation is the authoritative state for all major-lane work.
 - Complex requests are decomposed before execution, so the system can reason in smaller grounded steps.
-- Only substeps are allowed to opt out of the full context stack.
+- Only substeps are allowed to opt out of the full context stack, and they do so only when distilled context is sufficient.
 - Tool use is attached to the execution path, not treated as a separate architecture.
 - Post-answer memory work is sequential and isolated from answer generation.
 
