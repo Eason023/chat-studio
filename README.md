@@ -295,7 +295,8 @@ flowchart TD
   C --> K["Stream answer to UI"]
   J --> K
 
-  K --> L["Create next-turn session note"]
+  K --> L["Refresh next-turn session note
+  Stateless slot"]
   L --> M["Refresh global memory on stateless slot
   Full memory bank + latest request + latest session note
   Schema phase"]
@@ -317,19 +318,19 @@ flowchart LR
   D --> E["Major-lane prompt"]
 
   F["Stateless front
-  step system prompt + filtered cross-session memory"] --> G["Shared stateless context
-  request time + analysis summary + session note + latest user content"]
+  dedicated stateless system prompt"] --> G["Shared stateless envelope
+  request time + shared stateless context"]
   G --> H["Phase tail
   phase instruction + phase payload"]
-  H --> I["Stateless-step prompt"]
+  H --> I["Stateless-phase prompt"]
 ```
 
 Prompt shape:
 
 - `Major-lane prompt`
   `contextual system prompt -> full chat history -> request time + filtered cross-session memory snapshot -> phase instruction + phase payload`
-- `Stateless-step prompt`
-  `step system prompt + filtered cross-session memory -> request time + analysis summary + session note + latest user content -> phase instruction + phase payload`
+- `Stateless-phase prompt`
+  `dedicated stateless system prompt -> request time + shared stateless context -> phase instruction + phase payload`
 
 Where the reusable prefix comes from:
 
@@ -340,11 +341,20 @@ Where the reusable prefix comes from:
 - `Shared contextual envelope`
   `request time + cross-session memory excluding the current session key`
 - `Stateless front`
-  `step system prompt + filtered cross-session memory`
-- `Shared stateless context`
-  `request time + analysis summary + previous-turn session note + latest user content`
+  `dedicated stateless system prompt`
+- `Shared stateless envelope`
+  `request time + shared stateless context`
 
-Native tool schemas are attached in the request body for both major-lane and stateless phases. They are no longer duplicated as plaintext tool catalogs inside the prompt.
+Native tool schemas are attached in the request body when a phase is tool-capable. They are no longer duplicated as plaintext tool catalogs inside the prompt.
+
+Examples of stateless shared context:
+
+- `Stateless substep / stateless step summary`
+  `analysis summary + previous-turn session note + latest user content`
+- `Session note refresh`
+  `previous session note + latest request/content + final answer + step summaries`
+- `Global memory refresh`
+  `full memory bank + latest request + latest session note`
 
 ```mermaid
 flowchart TD
@@ -355,22 +365,18 @@ flowchart TD
   Instant answer
   Full-context substeps
   Full-context step summaries
-  Final synthesis
-  Session note"]
+  Final synthesis"]
 
-  C["Stateless-step prompt"] --> D["Shorter shared prefix
+  C["Stateless-phase prompt"] --> D["Shorter shared prefix
   Stateless substeps
-  Stateless step summaries"]
-
-  E["Memory-refresh prompt"] --> F["Independent stateless memory phase
-  Full memory bank including current session key
-  Latest request
-  Latest session note"]
+  Stateless step summaries
+  Session note refresh
+  Global memory refresh"]
 ```
 
-The long reusable prefix is the `major lane` stack. Final answers never drop out of it. Only internal step work, such as stateless substeps and stateless step summaries, may choose the shorter stateless prompt shape.
+The long reusable prefix is the `major lane` stack. Final answers never drop out of it. Only non-major-lane internal work, such as stateless substeps, stateless step summaries, session-note refresh, and global-memory refresh, uses the shorter stateless prompt shape.
 
-The memory refresh phase is separate. It does not reuse the major-lane long prefix and it does not use the substep stateless prompt. It runs on the stateless slot with a dedicated memory-refresh prompt.
+The memory refresh phase is still separate from the major lane, but it now follows the same stateless outer request shape as the other stateless phases.
 
 There is no rolling history window in the current architecture. A substep either receives the whole major-lane stack or it receives the stateless step prompt.
 

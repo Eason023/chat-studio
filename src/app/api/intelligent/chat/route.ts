@@ -669,6 +669,53 @@ function buildStepSharedRequestContext(args: {
     .join("\n\n")
 }
 
+function buildNextTurnSessionSummarySharedContext(args: {
+  previousSessionSummary?: string
+  latestUserSummary: string
+  latestUserContentText: string
+  finalAnswer: string
+  stepResults: StepExecutionResult[]
+}) {
+  return [
+    "Session-note refresh context:",
+    `Previous session note:\n${
+      args.previousSessionSummary || "No previous-turn session note is available."
+    }`,
+    `Latest user request: ${args.latestUserSummary}`,
+    `Latest user content:\n${args.latestUserContentText}`,
+    `Final assistant answer:\n${
+      args.finalAnswer.trim() || "No visible answer text."
+    }`,
+    args.stepResults.length > 0
+      ? `Step summaries:\n${args.stepResults
+          .map(
+            (result, index) =>
+              `${index + 1}. ${result.step.title}\n${result.summary}`
+          )
+          .join("\n\n")}`
+      : "Step summaries: instant route; no intermediate steps.",
+    "Update the previous session note into the next-turn session note. Preserve still-relevant goals, constraints, code or document state, attachment context, and unresolved follow-ups that future stateless work may need.",
+    "Drop stale or fully resolved detail instead of accumulating a long rolling transcript.",
+  ].join("\n\n")
+}
+
+function buildGlobalMemoryRefreshSharedContext(args: {
+  memory?: IntelligentGlobalMemory
+  latestUserSummary: string
+  latestSessionSummary: string
+}) {
+  return [
+    "Global-memory refresh context:",
+    `Full current memory bank (including the current session key when present):\n${
+      formatGlobalMemoryDetail(args.memory)
+    }`,
+    `Latest user request: ${args.latestUserSummary}`,
+    `Latest session note:\n${
+      args.latestSessionSummary.trim() || "No session summary was produced."
+    }`,
+  ].join("\n\n")
+}
+
 function buildStepSpecificContext(args: {
   step: PlannedStep
   priorResultsBlock: string
@@ -818,6 +865,7 @@ function buildContextualPhaseMessages(args: {
 
 function buildStatelessPhaseMessages(args: {
   mode: IntelligentModeConfig
+  baseSystemPrompt?: string
   phaseInstruction: string
   sharedContext?: string
   phaseContext?: string[]
@@ -828,7 +876,7 @@ function buildStatelessPhaseMessages(args: {
 }) {
   return [
     buildLeadingSystemMessage({
-      base: createStepSystemPrompt(args.mode),
+      base: args.baseSystemPrompt ?? createStepSystemPrompt(args.mode),
       globalMemory: args.globalMemory,
       currentSessionKey: args.currentSessionKey,
       tools: args.tools,
@@ -1410,35 +1458,26 @@ function buildPlannerMessages(args: {
 
 function buildNextTurnSessionSummaryMessages(args: {
   mode: IntelligentModeConfig
-  history: IntelligentChatHistoryMessage[]
   analysis: ProblemAnalysis
   latestUserSummary: string
+  latestUserContentText: string
   finalAnswer: string
   stepResults: StepExecutionResult[]
-  globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
-  tools?: McpTool[]
-  currentSessionKey?: string
+  timeContext?: string
 }) {
-  return buildContextualPhaseMessages({
+  return buildStatelessPhaseMessages({
     mode: args.mode,
-    history: args.history,
-    globalMemory: args.globalMemory,
-    tools: args.tools,
-    currentSessionKey: args.currentSessionKey,
-    phaseInstruction: createNextTurnSessionSummarySystemPrompt(args.analysis),
-    phaseContext: [
-      `Latest user request: ${args.latestUserSummary}`,
-      `Final assistant answer:\n${args.finalAnswer.trim() || "No visible answer text."}`,
-      args.stepResults.length > 0
-        ? `Step summaries:\n${args.stepResults
-            .map(
-              (result, index) =>
-                `${index + 1}. ${result.step.title}\n${result.summary}`
-            )
-            .join("\n\n")}`
-        : "Step summaries: instant route; no intermediate steps.",
-    ],
+    baseSystemPrompt: createNextTurnSessionSummarySystemPrompt(args.analysis),
+    timeContext: args.timeContext,
+    sharedContext: buildNextTurnSessionSummarySharedContext({
+      previousSessionSummary: args.sessionSummary,
+      latestUserSummary: args.latestUserSummary,
+      latestUserContentText: args.latestUserContentText,
+      finalAnswer: args.finalAnswer,
+      stepResults: args.stepResults,
+    }),
+    phaseInstruction: "Produce the refreshed next-turn session note now.",
   })
 }
 
@@ -1512,11 +1551,12 @@ function createPlannerSystemPrompt(analysis: ProblemAnalysis) {
 
 function createNextTurnSessionSummarySystemPrompt(analysis: ProblemAnalysis) {
   return [
-    "Current orchestration phase: prepare the next-turn session summary.",
+    "Current orchestration phase: refresh the next-turn session note.",
     `Current analysis summary: ${analysis.analysisSummary}`,
-    "Summarize the current session state so the next user turn can recover what problem is being worked on.",
-    "Keep important constraints, code/doc state, attachment context, what changed in this turn, and what would matter if the next turn uses a stateless sub-step.",
-    "Do not write a rolling memory. This summary is only a compact snapshot for the next turn.",
+    "You are updating a compact per-session note for the next user turn, especially for future stateless substeps.",
+    "Use the previous session note as the base state, then merge in what changed in the latest turn.",
+    "Keep important constraints, code or document state, attachment context, unresolved follow-ups, and any local session state that future stateless work may need.",
+    "Do not rewrite the full conversation. Do not create cross-session memory here. Do not copy the final answer verbatim unless a specific detail must be preserved for future work.",
     "Return plain text only, concise but information-dense.",
   ].join(" ")
 }
@@ -3085,28 +3125,26 @@ async function updateGlobalMemory(args: {
   currentSessionKey: string
   latestUserSummary: string
   latestSessionSummary: string
+  timeContext?: string
   signal: AbortSignal
   enableThinking: boolean
   slotId?: number
 }) {
-  const messages: ProviderMessage[] = [
-    buildLeadingSystemMessage({
-      base: createGlobalMemorySystemPrompt(args.mode, args.currentSessionKey),
-      globalMemory: args.previousMemory,
-      // Deliberately include the current session key here so this phase can
-      // decide whether the memory is already captured.
-      currentSessionKey: undefined,
+  const messages = buildStatelessPhaseMessages({
+    mode: args.mode,
+    baseSystemPrompt: createGlobalMemorySystemPrompt(
+      args.mode,
+      args.currentSessionKey
+    ),
+    timeContext: args.timeContext,
+    sharedContext: buildGlobalMemoryRefreshSharedContext({
+      memory: args.previousMemory,
+      latestUserSummary: args.latestUserSummary,
+      latestSessionSummary: args.latestSessionSummary,
     }),
-    {
-      role: "user",
-      content: [
-        `Latest user request: ${args.latestUserSummary}`,
-        `Latest session summary:\n${args.latestSessionSummary.trim() || "No session summary was produced."}`,
-        "Review the full memory bank and decide whether the current session key needs a new or updated memory entry.",
-        "Prefer leaving the current session absent from a tier over writing weak or generic memory.",
-      ].join("\n\n"),
-    },
-  ]
+    phaseInstruction:
+      "Review the full memory bank and decide whether the current session key needs a new or updated memory entry. Prefer leaving the current session absent from a tier over writing weak or generic memory.",
+  })
 
   const memoryCompletion = await createChatCompletion({
     baseUrl: args.baseUrl,
@@ -3132,15 +3170,13 @@ async function createNextTurnSessionSummary(args: {
   baseUrl: string
   apiKey?: string
   mode: IntelligentModeConfig
-  history: IntelligentChatHistoryMessage[]
   analysis: ProblemAnalysis
   latestUserSummary: string
+  latestUserContentText: string
   finalAnswer: string
   stepResults: StepExecutionResult[]
-  globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
-  tools?: McpTool[]
-  currentSessionKey?: string
+  timeContext?: string
   signal: AbortSignal
   enableThinking: boolean
   slotId?: number
@@ -3153,20 +3189,16 @@ async function createNextTurnSessionSummary(args: {
     maxTokens: 320,
     enableThinking: args.enableThinking,
     slotId: args.slotId,
-    tools: getProviderToolsOrUndefined(args.tools),
-    toolChoice: "none",
     signal: args.signal,
     messages: buildNextTurnSessionSummaryMessages({
       mode: args.mode,
-      history: args.history,
       analysis: args.analysis,
       latestUserSummary: args.latestUserSummary,
+      latestUserContentText: args.latestUserContentText,
       finalAnswer: args.finalAnswer,
       stepResults: args.stepResults,
-      globalMemory: args.globalMemory,
       sessionSummary: args.sessionSummary,
-      tools: args.tools,
-      currentSessionKey: args.currentSessionKey,
+      timeContext: args.timeContext,
     }),
   })
 
@@ -3454,14 +3486,14 @@ export async function POST(request: Request) {
         const summaryReasoningMode = selectReasoningMode({
           mode,
           modelId: mode.majorModel,
-          lane: "contextual",
+          lane: "stateless",
           difficultyScore: instantAnalysis.difficultyScore,
           phaseKind: "summary",
         })
         const housekeepingSlotId = nativeSlotControlEnabled
-          ? majorContextualSlotId
+          ? majorStatelessSlotId
           : undefined
-        const housekeepingLane = "contextual" as const
+        const housekeepingLane = "stateless" as const
 
         send({
           type: "phase",
@@ -3469,7 +3501,7 @@ export async function POST(request: Request) {
             id: "session-summary",
             label: "Preparing session summary",
             status: "active",
-            detail: "Preparing a compact session snapshot for the next user turn.",
+            detail: "Refreshing a compact session note for future stateless work.",
             modelId: mode.majorModel,
             lane: housekeepingLane,
             reasoningMode: summaryReasoningMode,
@@ -3483,15 +3515,13 @@ export async function POST(request: Request) {
             baseUrl,
             apiKey,
             mode,
-            history: body.history,
             analysis: instantAnalysis,
             latestUserSummary: message,
+            latestUserContentText,
             finalAnswer: instantAnswer,
             stepResults: [],
-            globalMemory,
             sessionSummary,
-            tools: availableMcpTools,
-            currentSessionKey,
+            timeContext: requestTimeContext,
             signal: request.signal,
             enableThinking: summaryReasoningMode === "think",
             slotId: housekeepingSlotId,
@@ -3586,6 +3616,7 @@ export async function POST(request: Request) {
             currentSessionKey,
             latestUserSummary: message,
             latestSessionSummary: currentTurnSessionSummary,
+            timeContext: requestTimeContext,
             signal: request.signal,
             enableThinking: globalMemoryReasoningMode === "think",
             slotId: majorStatelessSlotId,
@@ -4174,14 +4205,14 @@ export async function POST(request: Request) {
           const summaryReasoningMode = selectReasoningMode({
             mode,
             modelId: mode.majorModel,
-            lane: "contextual",
+            lane: "stateless",
             difficultyScore: analysis.difficultyScore,
             phaseKind: "summary",
           })
           const housekeepingSlotId = nativeSlotControlEnabled
-            ? majorContextualSlotId
+            ? majorStatelessSlotId
             : undefined
-          const housekeepingLane = "contextual" as const
+          const housekeepingLane = "stateless" as const
 
           send({
             type: "phase",
@@ -4189,7 +4220,7 @@ export async function POST(request: Request) {
               id: "session-summary",
               label: "Preparing session summary",
               status: "active",
-              detail: "Preparing a compact session snapshot for the next user turn.",
+              detail: "Refreshing a compact session note for future stateless work.",
               modelId: mode.majorModel,
               lane: housekeepingLane,
               reasoningMode: summaryReasoningMode,
@@ -4203,15 +4234,13 @@ export async function POST(request: Request) {
               baseUrl,
               apiKey,
               mode,
-              history: body.history,
               analysis,
               latestUserSummary: message,
+              latestUserContentText,
               finalAnswer: synthesisAnswer,
               stepResults,
-              globalMemory,
               sessionSummary,
-              tools: availableMcpTools,
-              currentSessionKey,
+              timeContext: requestTimeContext,
               signal: request.signal,
               enableThinking: summaryReasoningMode === "think",
               slotId: housekeepingSlotId,
@@ -4308,6 +4337,7 @@ export async function POST(request: Request) {
               currentSessionKey,
               latestUserSummary: message,
               latestSessionSummary: currentTurnSessionSummary,
+              timeContext: requestTimeContext,
               signal: request.signal,
               enableThinking: globalMemoryReasoningMode === "think",
               slotId: majorStatelessSlotId,
