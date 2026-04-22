@@ -461,7 +461,10 @@ function sanitizeMemoryEntries(
     })
     .filter((entry): entry is IntelligentGlobalMemoryEntry => Boolean(entry))
 
-  return dedupeIntelligentMemoryEntries(parsedEntries, category).slice(0, limit)
+  return dedupeIntelligentMemoryEntries(
+    [...parsedEntries, ...previousEntries],
+    category
+  ).slice(0, limit)
 }
 
 function sanitizeGlobalMemory(
@@ -1024,12 +1027,12 @@ function buildGlobalMemoryResponseFormat() {
   return buildJsonSchemaResponseFormat("global_memory", {
     type: "object",
     description:
-      "Three-tier cross-session memory bank. Each tier contains session-keyed entries.",
+      "Three-tier cross-session memory update payload. Each tier contains session-keyed entries to retain or add after this refresh. Unchanged prior entries may be omitted.",
     properties: {
       userFeatures: {
         type: "array",
         description:
-          "Only unusually important, stable user facts or enduring preferences the user clearly cares about, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct memories.",
+          "Only unusually important, stable user facts or enduring preferences the user clearly cares about, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct memories. Unchanged older entries may be omitted.",
         items: memoryEntrySchema(
           "One user-features entry keyed by the session hash that established it. Several distinct entries may come from the same session."
         ),
@@ -1037,7 +1040,7 @@ function buildGlobalMemoryResponseFormat() {
       instructionMemory: {
         type: "array",
         description:
-          "Only durable response instructions or preferences the user strongly values and would likely want preserved across sessions, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct instructions.",
+          "Only durable response instructions or preferences the user strongly values and would likely want preserved across sessions, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct instructions. Unchanged older entries may be omitted.",
         items: memoryEntrySchema(
           "One instruction-memory entry keyed by the session hash that established it. Several distinct entries may come from the same session."
         ),
@@ -1045,7 +1048,7 @@ function buildGlobalMemoryResponseFormat() {
       recentEvents: {
         type: "array",
         description:
-          "Ongoing work, active deliverables, blockers, or temporary priorities, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct notable events. Keep this freshest and shortest. Never store greetings, timestamps, pleasantries, or trivial turn-by-turn chatter.",
+          "Ongoing work, active deliverables, blockers, or temporary priorities, represented as session-keyed entries. Multiple entries from the same session are allowed when they capture distinct notable events. Keep this freshest and shortest. Unchanged older entries may be omitted. Never store greetings, timestamps, pleasantries, or trivial turn-by-turn chatter.",
         items: memoryEntrySchema(
           "One recent-events entry keyed by the session hash that established it. Several distinct entries may come from the same session."
         ),
@@ -1356,6 +1359,8 @@ function buildPhaseMetrics(args: {
 function buildRoutingGateMessages(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
+  latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -1370,12 +1375,19 @@ function buildRoutingGateMessages(args: {
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createRoutingGateSystemPrompt(),
+    phaseContext: [
+      `Latest user request: ${args.latestUserSummary}`,
+      `Latest user content:\n${args.latestUserContentText}`,
+      "Route based on the newest user turn above. Treat conversation history, session notes, and cross-session memory as supporting context only.",
+    ],
   })
 }
 
 function buildAnalysisMessages(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
+  latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -1390,6 +1402,11 @@ function buildAnalysisMessages(args: {
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createAnalysisSystemPrompt(),
+    phaseContext: [
+      `Latest user request: ${args.latestUserSummary}`,
+      `Latest user content:\n${args.latestUserContentText}`,
+      "Analyze the newest user turn above. Use older history and memory only to identify real dependencies, constraints, or context requirements.",
+    ],
   })
 }
 
@@ -1398,6 +1415,7 @@ function buildPlannerMessages(args: {
   history: IntelligentChatHistoryMessage[]
   analysis: ProblemAnalysis
   latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -1412,7 +1430,11 @@ function buildPlannerMessages(args: {
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createPlannerSystemPrompt(args.analysis),
-    phaseContext: [`Latest user request: ${args.latestUserSummary}`],
+    phaseContext: [
+      `Latest user request: ${args.latestUserSummary}`,
+      `Latest user content:\n${args.latestUserContentText}`,
+      "Plan for the newest user turn above. Do not decompose unrelated remembered topics that are only background context.",
+    ],
   })
 }
 
@@ -1455,11 +1477,14 @@ function createRoutingGateSystemPrompt() {
     "Current orchestration phase: direct-answer gate.",
     "Decide whether the latest user request can be answered immediately or should go to the multi-step path.",
     "Keep the judgment lightweight.",
+    "Route based on the newest user turn, not on remembered earlier topics by themselves.",
+    "Treat conversation history, session state, and cross-session memory as background context only. They may clarify dependencies, but they are not the current request unless the latest user turn actually continues them.",
     "The gate must make the final route decision. Do not assume a later phase will re-route the request.",
     "Prefer instant whenever a direct response is sufficient, even if that direct response may still use tools or careful reasoning.",
     "Choose multi-step only when the work clearly benefits from at least two distinct internal steps such as investigate -> compare, inspect -> modify, or gather evidence -> synthesize.",
     "Requests like proofs, broad project or codebase analysis, multi-file debugging, architecture tradeoff analysis, and verification-heavy research should strongly lean toward multi-step.",
     "If the work would effectively be one substantive action followed by the final answer, keep it on instant instead of forcing a one-step plan.",
+    "A greeting, acknowledgement, or casual opener should stay on the instant path unless the newest user turn clearly includes a substantive task.",
     "gateSummary must be only one to three short sentences.",
     "gateSummary should briefly restate the user's intent and whether direct answer is enough.",
   ].join(" ")
@@ -1469,6 +1494,7 @@ function createAnalysisSystemPrompt() {
   return [
     "Current orchestration phase: detailed multi-step analysis.",
     "The request has already been definitively routed to the multi-step path.",
+    "Analyze the newest user turn itself, not recalled topics from older memory unless the newest user turn clearly depends on them.",
     "Analyze the task in more depth so planning and model routing can be accurate.",
     DIFFICULTY_RUBRIC,
     "Do not reconsider the route. The gate already decided that this request should use multi-step execution.",
@@ -1484,6 +1510,8 @@ function createContextualLaneSystemPrompt(mode: IntelligentModeConfig) {
     `The current major model is "${mode.majorModel}".`,
     "This lane is reserved for phases that depend on prior session context and should preserve a stable prompt prefix.",
     "Treat the conversation history as the authoritative session state.",
+    "When the final user message identifies the latest user request or latest user content, treat that material as the current task anchor for this phase.",
+    "Use older conversation state and cross-session memory as supporting context, not as a replacement for what the newest user turn is asking now.",
     "Before answering factual, current, external-state, or verification-sensitive questions, first strongly consider using available tools to ground the answer.",
     "When MCP tools are available and can materially improve factual reliability, verification, or external grounding, prefer tool-assisted work over unsupported recall.",
     "If native tools are present in the API request, invoke them through native tool calling instead of narrating pretend tool usage in plain text.",
@@ -1503,6 +1531,7 @@ function createPlannerSystemPrompt(analysis: ProblemAnalysis) {
     "Create the smallest useful step plan.",
     `Target ${analysis.recommendedStepCount} steps unless fewer are enough.`,
     "Do not create unnecessary steps.",
+    "Plan against the newest user turn and its real dependencies, not against older remembered topics that are not actually in scope.",
     "Do not output a one-step plan. If only one substantive step would be enough, this request should have stayed on the instant path instead of reaching the planner.",
     "Use 2 to 10 steps. Add steps only when they correspond to genuinely distinct phases or concerns.",
     "When available MCP tools can reduce hallucination, fetch external facts, or verify the answer, prefer a plan that explicitly leaves room for those tool-backed steps.",
@@ -1594,6 +1623,8 @@ async function createStructuredRoutingGateCompletion(args: {
   apiKey?: string
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
+  latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -1608,6 +1639,8 @@ async function createStructuredRoutingGateCompletion(args: {
   const messages = buildRoutingGateMessages({
     mode: args.mode,
     history: args.history,
+    latestUserSummary: args.latestUserSummary,
+    latestUserContentText: args.latestUserContentText,
     globalMemory: args.globalMemory,
     sessionSummary: args.sessionSummary,
     tools: args.tools,
@@ -1634,6 +1667,8 @@ async function createStructuredAnalysisCompletion(args: {
   apiKey?: string
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
+  latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -1648,6 +1683,8 @@ async function createStructuredAnalysisCompletion(args: {
   const messages = buildAnalysisMessages({
     mode: args.mode,
     history: args.history,
+    latestUserSummary: args.latestUserSummary,
+    latestUserContentText: args.latestUserContentText,
     globalMemory: args.globalMemory,
     sessionSummary: args.sessionSummary,
     tools: args.tools,
@@ -1676,6 +1713,7 @@ async function createStructuredPlannerCompletion(args: {
   history: IntelligentChatHistoryMessage[]
   analysis: ProblemAnalysis
   latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -1692,6 +1730,7 @@ async function createStructuredPlannerCompletion(args: {
     history: args.history,
     analysis: args.analysis,
     latestUserSummary: args.latestUserSummary,
+    latestUserContentText: args.latestUserContentText,
     globalMemory: args.globalMemory,
     sessionSummary: args.sessionSummary,
     tools: args.tools,
@@ -1723,6 +1762,8 @@ function createInstantSystemPrompt(
     `Analysis summary: ${analysis.analysisSummary}`,
     "This request was routed to the instant path.",
     "Answer clearly and directly for the user.",
+    "Use the newest user turn as the task anchor. Use older conversation state or cross-session memory only when the newest turn clearly depends on them.",
+    "If the newest user turn is brief or social, answer naturally and briefly instead of proactively surfacing unrelated remembered topics.",
     "Before answering, strongly consider using available tools whenever they can improve factual reliability or recover current external information.",
     "Do not claim to browse, search, verify, or call tools unless actual tool-grounded results are already present in the provided context.",
     'Never write placeholder narration such as "(searching...)" or "let me look that up" inside the final answer.',
@@ -1741,6 +1782,7 @@ function createSynthesisSystemPrompt(
     "This request was routed to the multi-step path.",
     "Answer the user's actual request directly by using the original request together with the completed step results.",
     "Use the completed step results to craft the final answer.",
+    "Do not let unrelated remembered topics or earlier branches of the conversation take over the answer unless the newest user turn clearly asks for them.",
     "When a step result contains an important derivation, proof method, debugging path, implementation rationale, or comparison logic that is necessary to answer well, carry that substance into the final answer instead of only giving the final verdict.",
     "Prefer grounded, tool-backed findings over unsupported recall whenever tool results are available.",
     "If completed steps used MCP tools, rely on those grounded results and present them naturally.",
@@ -1770,6 +1812,7 @@ function createGlobalMemorySystemPrompt(
     "If the latest request and summary are ordinary, one-off, weakly implied, or already captured in the memory bank, do not add or restate memory.",
     "Do not store greetings, pleasantries, timestamps, generic acknowledgements, or trivial chat meta.",
     "Multiple entries from the same session are allowed within one tier when they capture distinct memories, but do not create duplicate or near-duplicate restatements.",
+    "Return only the entries that should be retained or added after this refresh. Unchanged prior entries may be omitted and will be preserved automatically.",
     "Keep each memory value concise, dense, and useful for future retrieval. Do not paste the whole conversation.",
   ].join(" ")
 }
@@ -2506,6 +2549,8 @@ function buildInstantMessages(args: {
   mode: IntelligentModeConfig
   analysis: ProblemAnalysis
   history: IntelligentChatHistoryMessage[]
+  latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools?: McpTool[]
@@ -2520,7 +2565,12 @@ function buildInstantMessages(args: {
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     phaseInstruction: createInstantSystemPrompt(args.mode, args.analysis),
-    phaseContext: ["Write the final user-facing answer now."],
+    phaseContext: [
+      `Latest user request: ${args.latestUserSummary}`,
+      `Latest user content:\n${args.latestUserContentText}`,
+      "Answer the newest user turn directly now.",
+      "Write the final user-facing answer now.",
+    ],
   })
 }
 
@@ -2581,6 +2631,8 @@ async function executeInstantWithMcp(args: {
   mode: IntelligentModeConfig
   analysis: ProblemAnalysis
   history: IntelligentChatHistoryMessage[]
+  latestUserSummary: string
+  latestUserContentText: string
   globalMemory?: IntelligentGlobalMemory
   sessionSummary?: string
   tools: McpTool[]
@@ -2599,6 +2651,8 @@ async function executeInstantWithMcp(args: {
     mode: args.mode,
     analysis: args.analysis,
     history: args.history,
+    latestUserSummary: args.latestUserSummary,
+    latestUserContentText: args.latestUserContentText,
     globalMemory: args.globalMemory,
     sessionSummary: args.sessionSummary,
     tools: args.tools,
@@ -3230,9 +3284,10 @@ export async function POST(request: Request) {
       : [
           {
             type: "text" as const,
-            text: message,
-          },
-        ]
+          text: message,
+        },
+      ]
+  const latestUserContentText = formatMessagePartsForPrompt(latestUserContent)
   const sessionSummary = trimPersistedSessionSummary(body.sessionSummary)
   const preAnalysisHeuristic = fallbackProblemAnalysis(message)
   const routingReasoningMode: IntelligentReasoningMode = "instant"
@@ -3277,7 +3332,7 @@ export async function POST(request: Request) {
 
         const instantCompletion =
           usingInstantMcp
-            ? await executeInstantWithMcp({
+              ? await executeInstantWithMcp({
                 baseUrl,
                 apiKey,
                 serverUrl: mcpServerUrl!,
@@ -3285,6 +3340,8 @@ export async function POST(request: Request) {
                 mode,
                 analysis: instantAnalysis,
                 history: body.history,
+                latestUserSummary: message,
+                latestUserContentText,
                 globalMemory,
                 sessionSummary,
                 tools: availableMcpTools,
@@ -3332,6 +3389,8 @@ export async function POST(request: Request) {
                   mode,
                   analysis: instantAnalysis,
                   history: body.history,
+                  latestUserSummary: message,
+                  latestUserContentText,
                   globalMemory,
                   sessionSummary,
                   tools: availableMcpTools,
@@ -3665,6 +3724,8 @@ export async function POST(request: Request) {
           apiKey,
           mode,
           history: body.history,
+          latestUserSummary: message,
+          latestUserContentText,
           globalMemory,
           sessionSummary,
           tools: availableMcpTools,
@@ -3746,6 +3807,8 @@ export async function POST(request: Request) {
           apiKey,
           mode,
           history: body.history,
+          latestUserSummary: message,
+          latestUserContentText,
           globalMemory,
           sessionSummary,
           tools: availableMcpTools,
@@ -3809,6 +3872,7 @@ export async function POST(request: Request) {
           history: body.history,
           analysis,
           latestUserSummary: message,
+          latestUserContentText,
           globalMemory,
           sessionSummary,
           tools: availableMcpTools,
