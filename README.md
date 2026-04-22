@@ -318,8 +318,8 @@ flowchart LR
   D --> E["Major-lane prompt"]
 
   F["Stateless front
-  dedicated stateless system prompt"] --> G["Shared stateless envelope
-  request time + shared stateless context"]
+  shared stateless lane system prompt"] --> G["Shared stateless envelope
+  request time + optional filtered cross-session memory snapshot + shared stateless context"]
   G --> H["Phase tail
   phase instruction + phase payload"]
   H --> I["Stateless-phase prompt"]
@@ -330,7 +330,7 @@ Prompt shape:
 - `Major-lane prompt`
   `contextual system prompt -> full chat history -> request time + filtered cross-session memory snapshot -> phase instruction + phase payload`
 - `Stateless-phase prompt`
-  `dedicated stateless system prompt -> request time + shared stateless context -> phase instruction + phase payload`
+  `shared stateless lane system prompt -> request time + optional filtered cross-session memory snapshot + shared stateless context -> phase instruction + phase payload`
 
 Where the reusable prefix comes from:
 
@@ -341,9 +341,9 @@ Where the reusable prefix comes from:
 - `Shared contextual envelope`
   `request time + cross-session memory excluding the current session key`
 - `Stateless front`
-  `dedicated stateless system prompt`
+  `shared stateless lane system prompt`
 - `Shared stateless envelope`
-  `request time + shared stateless context`
+  `request time + optional filtered cross-session memory snapshot + shared stateless context`
 
 Native tool schemas are attached in the request body when a phase is tool-capable. They are no longer duplicated as plaintext tool catalogs inside the prompt.
 

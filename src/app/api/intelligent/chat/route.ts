@@ -605,23 +605,6 @@ function buildGlobalMemoryContext(
   return lines.join("\n")
 }
 
-function buildLeadingSystemMessage(args: {
-  base: string
-  globalMemory?: IntelligentGlobalMemory | null
-  currentSessionKey?: string
-  tools?: McpTool[]
-}): ProviderMessage {
-  const sections = [
-    args.base.trim(),
-    buildGlobalMemoryContext(args.globalMemory, args.currentSessionKey),
-  ].filter((section) => section && section.trim().length > 0)
-
-  return {
-    role: "system",
-    content: sections.join("\n\n"),
-  }
-}
-
 function summarizeMessagePart(part: MessagePart) {
   if (part.type === "text") {
     return part.text.trim()
@@ -650,7 +633,7 @@ function buildStepSharedRequestContext(args: {
   includeSessionSummary?: boolean
 }) {
   return [
-    "Shared stateless request context:",
+    "Shared stateless context:",
     `Global analysis summary: ${args.analysis.analysisSummary}`,
     `Overall grounding need: ${args.analysis.groundingNeed}`,
     args.analysis.complexityFactors.length > 0
@@ -677,7 +660,7 @@ function buildNextTurnSessionSummarySharedContext(args: {
   stepResults: StepExecutionResult[]
 }) {
   return [
-    "Session-note refresh context:",
+    "Shared stateless context:",
     `Previous session note:\n${
       args.previousSessionSummary || "No previous-turn session note is available."
     }`,
@@ -705,7 +688,7 @@ function buildGlobalMemoryRefreshSharedContext(args: {
   latestSessionSummary: string
 }) {
   return [
-    "Global-memory refresh context:",
+    "Shared stateless context:",
     `Full current memory bank (including the current session key when present):\n${
       formatGlobalMemoryDetail(args.memory)
     }`,
@@ -830,6 +813,15 @@ function buildContextualSystemMessage(args: {
   }
 }
 
+function buildStatelessSystemMessage(args: {
+  mode: IntelligentModeConfig
+}): ProviderMessage {
+  return {
+    role: "system",
+    content: createStatelessLaneSystemPrompt(args.mode),
+  }
+}
+
 function buildContextualPhaseMessages(args: {
   mode: IntelligentModeConfig
   history: IntelligentChatHistoryMessage[]
@@ -865,27 +857,29 @@ function buildContextualPhaseMessages(args: {
 
 function buildStatelessPhaseMessages(args: {
   mode: IntelligentModeConfig
-  baseSystemPrompt?: string
   phaseInstruction: string
   sharedContext?: string
   phaseContext?: string[]
+  includeCrossSessionMemory?: boolean
   globalMemory?: IntelligentGlobalMemory
-  tools?: McpTool[]
   currentSessionKey?: string
   timeContext?: string
 }) {
   return [
-    buildLeadingSystemMessage({
-      base: args.baseSystemPrompt ?? createStepSystemPrompt(args.mode),
-      globalMemory: args.globalMemory,
-      currentSessionKey: args.currentSessionKey,
-      tools: args.tools,
+    buildStatelessSystemMessage({
+      mode: args.mode,
     }),
     {
       role: "user" as const,
       content: [
         "Stateless phase envelope.",
         args.timeContext ?? getCurrentTimeContext(),
+        args.includeCrossSessionMemory
+          ? `Cross-session memory snapshot:\n${
+              buildGlobalMemoryContext(args.globalMemory, args.currentSessionKey) ||
+              "No cross-session memory is currently stored."
+            }`
+          : "",
         args.sharedContext ?? "",
         args.phaseInstruction,
         ...(args.phaseContext ?? []),
@@ -1468,7 +1462,6 @@ function buildNextTurnSessionSummaryMessages(args: {
 }) {
   return buildStatelessPhaseMessages({
     mode: args.mode,
-    baseSystemPrompt: createNextTurnSessionSummarySystemPrompt(args.analysis),
     timeContext: args.timeContext,
     sharedContext: buildNextTurnSessionSummarySharedContext({
       previousSessionSummary: args.sessionSummary,
@@ -1477,7 +1470,8 @@ function buildNextTurnSessionSummaryMessages(args: {
       finalAnswer: args.finalAnswer,
       stepResults: args.stepResults,
     }),
-    phaseInstruction: "Produce the refreshed next-turn session note now.",
+    phaseInstruction: createNextTurnSessionSummarySystemPrompt(args.analysis),
+    phaseContext: ["Produce the refreshed next-turn session note now."],
   })
 }
 
@@ -1561,23 +1555,23 @@ function createNextTurnSessionSummarySystemPrompt(analysis: ProblemAnalysis) {
   ].join(" ")
 }
 
-function createStepSystemPrompt(mode: IntelligentModeConfig) {
+function createStatelessLaneSystemPrompt(mode: IntelligentModeConfig) {
   return [
-    `You are the stateless execution lane for Chat Studio Intelligent Mode "${mode.label}".`,
+    `You are the stateless lane for Chat Studio Intelligent Mode "${mode.label}".`,
     `The current major lane model is "${mode.majorModel}".`,
-    "This lane is reserved for internal steps that do not need the full session history and should preserve a stable prompt prefix across stateless work.",
-    "Treat the shared request context and current step details as the authoritative local state for this stateless step.",
-    "The final user message will define the exact stateless phase such as execution or summary.",
+    "This lane is reserved for internal and housekeeping phases that do not need the full session history and should preserve a stable prompt prefix across stateless work.",
+    "Treat the final user message as the authoritative local state for the current stateless phase.",
+    "Shared stateless context, cross-session memory snapshots, and phase-specific instructions will be provided in the final user message.",
     "Do not produce the final user-facing answer unless the phase explicitly asks for it.",
-    "Focus on findings, decisions, grounded facts, and unresolved constraints.",
-    "Before concluding the step, strongly consider using available tools whenever they can improve factual reliability or verify external information.",
+    "Focus on findings, decisions, grounded facts, reusable local state, and unresolved constraints.",
+    "Before concluding the current phase, strongly consider using available tools whenever they can improve factual reliability or verify external information.",
     "If native tools are available in the API request and they would materially help, call them directly instead of describing pretend searches or pretend tool usage in prose.",
   ].join(" ")
 }
 
-function createStepSummarySystemPrompt(mode: IntelligentModeConfig) {
+function createStepSummarySystemPrompt() {
   return [
-    `You are summarizing a completed internal step for Chat Studio Intelligent Mode "${mode.label}".`,
+    "Current orchestration phase: summarize a completed internal step.",
     "Return only the step conclusion, not hidden chain-of-thought.",
     "Completed step details and raw step work will be provided later in the user message.",
     "Produce a concise UI summary and a fuller reusable step conclusion.",
@@ -2558,8 +2552,8 @@ function buildStepExecutionMessages(args: {
 
   return buildStatelessPhaseMessages({
     mode: args.mode,
+    includeCrossSessionMemory: true,
     globalMemory: args.globalMemory,
-    tools: args.tools,
     currentSessionKey: args.currentSessionKey,
     timeContext: args.timeContext,
     sharedContext: sharedRequestContextBlock,
@@ -2893,12 +2887,12 @@ async function createStructuredStepSummary(args: {
         })
       : buildStatelessPhaseMessages({
           mode: args.mode,
+          includeCrossSessionMemory: true,
           globalMemory: args.globalMemory,
-          tools: args.tools,
           currentSessionKey: args.currentSessionKey,
           timeContext: args.timeContext,
           sharedContext: statelessSharedContext,
-          phaseInstruction: createStepSummarySystemPrompt(args.mode),
+          phaseInstruction: createStepSummarySystemPrompt(),
           phaseContext: summaryPromptContext,
         })
 
@@ -3132,18 +3126,19 @@ async function updateGlobalMemory(args: {
 }) {
   const messages = buildStatelessPhaseMessages({
     mode: args.mode,
-    baseSystemPrompt: createGlobalMemorySystemPrompt(
-      args.mode,
-      args.currentSessionKey
-    ),
     timeContext: args.timeContext,
     sharedContext: buildGlobalMemoryRefreshSharedContext({
       memory: args.previousMemory,
       latestUserSummary: args.latestUserSummary,
       latestSessionSummary: args.latestSessionSummary,
     }),
-    phaseInstruction:
+    phaseInstruction: createGlobalMemorySystemPrompt(
+      args.mode,
+      args.currentSessionKey
+    ),
+    phaseContext: [
       "Review the full memory bank and decide whether the current session key needs a new or updated memory entry. Prefer leaving the current session absent from a tier over writing weak or generic memory.",
+    ],
   })
 
   const memoryCompletion = await createChatCompletion({
