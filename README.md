@@ -254,7 +254,7 @@ The intelligent path can:
 Terms used below:
 
 - `major lane`
-  The fixed full-context stack: major model + tool catalog + cross-session memory except the current session key + full chat history.
+  The fixed full-context stack: major model + native tool schema + cross-session memory except the current session key + full chat history.
 - `stateless step`
   A cheaper substep that does not receive the full chat history.
 - `schema phase`
@@ -274,7 +274,7 @@ flowchart TD
   Schema phase"]
 
   B -->|Instant| C["Generate answer on major lane
-  Full history + tools + filtered memory"]
+  Full history + native tools + filtered memory"]
   B -->|Multi-step path| D["Analyze the task
   Schema phase"]
 
@@ -284,7 +284,7 @@ flowchart TD
   full major-lane context?"}
 
   F -->|Yes| G["Run step on major lane
-  Full history + tools + filtered memory"]
+  Full history + native tools + filtered memory"]
   F -->|No| H["Run step as stateless
   Session note + latest user content + prior step results"]
 
@@ -308,7 +308,7 @@ This is a serial post-answer flow: the session note is prepared first, and the g
 ```mermaid
 flowchart LR
   A["Major-lane front
-  contextual system prompt + tool catalog"] --> B["Shared long context
+  contextual system prompt"] --> B["Shared long context
   full chat history"]
   B --> C["Shared contextual envelope
   request time + filtered cross-session memory snapshot"]
@@ -317,7 +317,7 @@ flowchart LR
   D --> E["Major-lane prompt"]
 
   F["Stateless front
-  step system prompt + filtered cross-session memory + tool catalog"] --> G["Shared stateless context
+  step system prompt + filtered cross-session memory"] --> G["Shared stateless context
   request time + analysis summary + session note + latest user content"]
   G --> H["Phase tail
   phase instruction + phase payload"]
@@ -327,22 +327,24 @@ flowchart LR
 Prompt shape:
 
 - `Major-lane prompt`
-  `contextual system prompt + tool catalog -> full chat history -> request time + filtered cross-session memory snapshot -> phase instruction + phase payload`
+  `contextual system prompt -> full chat history -> request time + filtered cross-session memory snapshot -> phase instruction + phase payload`
 - `Stateless-step prompt`
-  `step system prompt + filtered cross-session memory + tool catalog -> request time + analysis summary + session note + latest user content -> phase instruction + phase payload`
+  `step system prompt + filtered cross-session memory -> request time + analysis summary + session note + latest user content -> phase instruction + phase payload`
 
 Where the reusable prefix comes from:
 
 - `Major-lane front`
-  `contextual system prompt + tool catalog`
+  `contextual system prompt`
 - `Shared long context`
   `full session history`
 - `Shared contextual envelope`
   `request time + cross-session memory excluding the current session key`
 - `Stateless front`
-  `step system prompt + filtered cross-session memory + tool catalog`
+  `step system prompt + filtered cross-session memory`
 - `Shared stateless context`
   `request time + analysis summary + previous-turn session note + latest user content`
+
+Native tool schemas are attached in the request body for both major-lane and stateless phases. They are no longer duplicated as plaintext tool catalogs inside the prompt.
 
 ```mermaid
 flowchart TD

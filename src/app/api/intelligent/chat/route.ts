@@ -614,9 +614,6 @@ function buildLeadingSystemMessage(args: {
   const sections = [
     args.base.trim(),
     buildGlobalMemoryContext(args.globalMemory, args.currentSessionKey),
-    args.tools?.length
-      ? `Available MCP tools:\n${formatMcpToolsForPrompt(args.tools)}`
-      : "",
   ].filter((section) => section && section.trim().length > 0)
 
   return {
@@ -782,7 +779,6 @@ function buildContextualSystemMessage(args: {
     content: [
       createContextualLaneSystemPrompt(args.mode),
       "Contextual phase contract: keep this leading system prefix stable across contextual phases. Cross-session memory and per-phase instructions are appended later as user messages.",
-      `Available MCP tools:\n${formatMcpToolsForPrompt(args.tools ?? [])}`,
     ].join("\n\n"),
   }
 }
@@ -800,7 +796,6 @@ function buildContextualPhaseMessages(args: {
   return [
     buildContextualSystemMessage({
       mode: args.mode,
-      tools: args.tools,
     }),
     ...toProviderMessages(args.history),
     {
@@ -1059,35 +1054,6 @@ function buildGlobalMemoryResponseFormat() {
   })
 }
 
-function summarizeSchemaForPrompt(value: unknown, maxLength = 500) {
-  try {
-    const text = JSON.stringify(value, null, 2)
-    if (!text) {
-      return "{}"
-    }
-
-    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
-  } catch {
-    return "{}"
-  }
-}
-
-function formatMcpToolsForPrompt(tools: McpTool[]) {
-  if (tools.length === 0) {
-    return "No MCP tools are available for this request."
-  }
-
-  return tools
-    .map((tool, index) =>
-      [
-        `${index + 1}. ${tool.name}`,
-        `Description: ${tool.description}`,
-        `Input schema: ${summarizeSchemaForPrompt(tool.inputSchema ?? {})}`,
-      ].join("\n")
-    )
-    .join("\n\n")
-}
-
 function buildProviderTools(tools: McpTool[]): ProviderToolDefinition[] {
   return tools.map((tool) => ({
     type: "function",
@@ -1097,6 +1063,10 @@ function buildProviderTools(tools: McpTool[]): ProviderToolDefinition[] {
       parameters: isRecord(tool.inputSchema) ? tool.inputSchema : { type: "object" },
     },
   }))
+}
+
+function getProviderToolsOrUndefined(tools?: McpTool[]) {
+  return tools?.length ? buildProviderTools(tools) : undefined
 }
 
 function normalizeProviderToolCall(value: unknown): ProviderToolCall | null {
@@ -1658,6 +1628,8 @@ async function createStructuredRoutingGateCompletion(args: {
     enableThinking: args.enableThinking,
     slotId: args.slotId,
     responseFormat: buildRoutingGateResponseFormat(),
+    tools: getProviderToolsOrUndefined(args.tools),
+    toolChoice: "none",
     signal: args.signal,
   })
 }
@@ -1702,6 +1674,8 @@ async function createStructuredAnalysisCompletion(args: {
     enableThinking: args.enableThinking,
     slotId: args.slotId,
     responseFormat: buildAnalysisResponseFormat(),
+    tools: getProviderToolsOrUndefined(args.tools),
+    toolChoice: "none",
     signal: args.signal,
   })
 }
@@ -1748,6 +1722,8 @@ async function createStructuredPlannerCompletion(args: {
     enableThinking: args.enableThinking,
     slotId: args.slotId,
     responseFormat: buildPlannerResponseFormat(),
+    tools: getProviderToolsOrUndefined(args.tools),
+    toolChoice: "none",
     signal: args.signal,
   })
 }
@@ -1969,6 +1945,8 @@ async function streamChatCompletion(args: {
   temperature: number
   enableThinking?: boolean
   slotId?: number
+  tools?: ProviderToolDefinition[]
+  toolChoice?: ProviderToolChoice
   signal: AbortSignal
   onToken: (text: string) => void
   emitReasoningToOutput?: boolean
@@ -1992,6 +1970,12 @@ async function streamChatCompletion(args: {
         },
         ...(typeof args.slotId === "number"
           ? { id_slot: args.slotId, cache_prompt: true }
+          : {}),
+        ...(args.tools?.length
+          ? {
+              tools: args.tools,
+              tool_choice: args.toolChoice ?? "auto",
+            }
           : {}),
         chat_template_kwargs: {
           enable_thinking: Boolean(args.enableThinking),
@@ -2768,6 +2752,8 @@ async function executeInstantWithMcp(args: {
       temperature: EXECUTION_TEMPERATURE,
       enableThinking: args.reasoningMode === "think",
       slotId: args.slotId,
+      tools: getProviderToolsOrUndefined(args.tools),
+      toolChoice: "none",
       signal: args.signal,
       onToken: (text) => {
         streamedText += text
@@ -2886,6 +2872,8 @@ async function createStructuredStepSummary(args: {
     enableThinking: false,
     slotId: args.slotId,
     responseFormat,
+    tools: getProviderToolsOrUndefined(args.tools),
+    toolChoice: "none",
     signal: args.signal,
   })
 
@@ -3165,6 +3153,8 @@ async function createNextTurnSessionSummary(args: {
     maxTokens: 320,
     enableThinking: args.enableThinking,
     slotId: args.slotId,
+    tools: getProviderToolsOrUndefined(args.tools),
+    toolChoice: "none",
     signal: args.signal,
     messages: buildNextTurnSessionSummaryMessages({
       mode: args.mode,
@@ -3384,6 +3374,8 @@ export async function POST(request: Request) {
                 temperature: EXECUTION_TEMPERATURE,
                 enableThinking: instantReasoningMode === "think",
                 slotId: instantSlotId,
+                tools: getProviderToolsOrUndefined(availableMcpTools),
+                toolChoice: "none",
                 signal: request.signal,
                 messages: buildInstantMessages({
                   mode,
@@ -4002,6 +3994,8 @@ export async function POST(request: Request) {
                   slotId: nativeSlotControlEnabled
                     ? selectedExecution.slotId
                     : undefined,
+                  tools: getProviderToolsOrUndefined(availableMcpTools),
+                  toolChoice: "none",
                   signal: request.signal,
                   messages: buildStepExecutionMessages({
                     mode,
@@ -4138,6 +4132,8 @@ export async function POST(request: Request) {
             slotId: nativeSlotControlEnabled
               ? synthesisSelection.slotId
               : undefined,
+            tools: getProviderToolsOrUndefined(availableMcpTools),
+            toolChoice: "none",
             signal: request.signal,
             messages: buildSynthesisMessages({
               mode,
