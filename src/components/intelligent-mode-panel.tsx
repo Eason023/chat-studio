@@ -127,6 +127,27 @@ function getMajorLanePhase(phases: IntelligentTracePhase[]) {
   )
 }
 
+function formatPromptTokenLabel(tokens?: number) {
+  if (typeof tokens !== "number") {
+    return ""
+  }
+
+  return `Context usage ${tokens.toLocaleString()} tok`
+}
+
+function getLatestContextUsageLabel(messages: IntelligentConversationMessage[]) {
+  const latestAssistantWithProcess = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.process?.phases.length)
+
+  if (!latestAssistantWithProcess?.process) {
+    return ""
+  }
+
+  const majorLanePhase = getMajorLanePhase(latestAssistantWithProcess.process.phases)
+  return formatPromptTokenLabel(majorLanePhase?.metrics?.promptTokens)
+}
+
 function compactInlineSummary(text?: string, maxLength = 120) {
   if (!text) return ""
 
@@ -542,6 +563,7 @@ export function IntelligentModePanel({
     globalMemory.userFeatures.length +
     globalMemory.instructionMemory.length +
     globalMemory.recentEvents.length
+  const contextUsageLabel = getLatestContextUsageLabel(messages)
 
   useEffect(() => {
     const container = scrollContainerRef.current
@@ -560,7 +582,7 @@ export function IntelligentModePanel({
   const currentSessionKey = getIntelligentSessionMemoryKey(activeConversation.id)
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background md:grid md:grid-cols-[296px_minmax(0,1fr)]">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background md:grid md:grid-cols-[296px_minmax(0,1fr)]">
       <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5 md:hidden">
         <Sheet>
           <SheetTrigger asChild>
@@ -576,7 +598,7 @@ export function IntelligentModePanel({
                 Browse sessions, switch workspace mode, and open memory settings.
               </SheetDescription>
             </SheetHeader>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-0 flex-1 overflow-hidden">
               <IntelligentConversationSidebar
                 appTitle={appTitle}
                 modeLabel={mode.label}
@@ -615,7 +637,7 @@ export function IntelligentModePanel({
         </Button>
       </div>
 
-      <aside className="hidden min-h-0 min-w-0 border-r border-border md:block">
+      <aside className="hidden min-h-0 min-w-0 overflow-hidden border-r border-border md:block">
         <IntelligentConversationSidebar
           appTitle={appTitle}
           modeLabel={mode.label}
@@ -631,7 +653,7 @@ export function IntelligentModePanel({
         />
       </aside>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           ref={scrollContainerRef}
           className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 sm:py-5"
@@ -708,6 +730,7 @@ export function IntelligentModePanel({
               onRemoveAttachment={removeAttachment}
               isProcessingAttachments={isProcessingAttachments}
               showAttachments
+              contextUsageLabel={contextUsageLabel}
             />
           </div>
         </div>

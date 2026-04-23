@@ -30,8 +30,8 @@ export function ConversationSidebar({
   onDeleteConversation,
 }: ConversationSidebarProps) {
   return (
-    <div className="flex h-full flex-col">
-      <div className="space-y-3 px-3 py-3">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 space-y-3 px-3 py-3">
         <div className="flex items-start justify-between gap-3">
           <AppBrand
             title={appTitle}
@@ -59,7 +59,7 @@ export function ConversationSidebar({
 
       <Separator />
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <div className="space-y-1.5 p-2">
           {conversations.map((conv) => {
             const isActive = conv.id === activeConversationId

@@ -25,7 +25,7 @@ export function AppShell({
   mobileTitle,
 }: AppShellProps) {
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground md:grid md:grid-cols-[296px_minmax(0,1fr)_320px]">
+    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-background text-foreground md:grid md:grid-cols-[296px_minmax(0,1fr)_320px]">
       <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5 md:hidden">
         <Sheet>
           <SheetTrigger asChild>
@@ -41,7 +41,7 @@ export function AppShell({
                 Open conversations and switch workspace mode.
               </SheetDescription>
             </SheetHeader>
-            <div className="min-h-0 flex-1">{sidebar}</div>
+            <div className="min-h-0 flex-1 overflow-hidden">{sidebar}</div>
           </SheetContent>
         </Sheet>
 
@@ -66,20 +66,20 @@ export function AppShell({
                 Model, reasoning, compare mode, and output controls.
               </SheetDescription>
             </SheetHeader>
-            <div className="min-h-0 flex-1">{settings}</div>
+            <div className="min-h-0 flex-1 overflow-hidden">{settings}</div>
           </SheetContent>
         </Sheet>
       </div>
 
-      <aside className="hidden min-h-0 min-w-0 border-r border-border md:block">
+      <aside className="hidden min-h-0 min-w-0 overflow-hidden border-r border-border md:block">
         {sidebar}
       </aside>
 
-      <main className="min-h-0 min-w-0 flex-1">
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {main}
       </main>
 
-      <aside className="hidden min-h-0 min-w-0 border-l border-border md:block">
+      <aside className="hidden min-h-0 min-w-0 overflow-hidden border-l border-border md:block">
         {settings}
       </aside>
     </div>
