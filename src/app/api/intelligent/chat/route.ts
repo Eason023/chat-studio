@@ -1726,7 +1726,7 @@ async function createStructuredRoutingGateCompletion(args: {
     timeContext: args.timeContext,
   })
 
-  return await createChatCompletion({
+  return await createStreamingStructuredCompletion({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.model,
@@ -1772,7 +1772,7 @@ async function createStructuredAnalysisCompletion(args: {
     timeContext: args.timeContext,
   })
 
-  return await createChatCompletion({
+  return await createStreamingStructuredCompletion({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.model,
@@ -1820,7 +1820,7 @@ async function createStructuredPlannerCompletion(args: {
     timeContext: args.timeContext,
   })
 
-  return await createChatCompletion({
+  return await createStreamingStructuredCompletion({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.model,
@@ -2051,8 +2051,10 @@ async function streamChatCompletion(args: {
   model: string
   messages: ProviderMessage[]
   temperature: number
+  maxTokens?: number
   enableThinking?: boolean
   slotId?: number
+  responseFormat?: JsonSchemaResponseFormat
   tools?: ProviderToolDefinition[]
   toolChoice?: ProviderToolChoice
   signal: AbortSignal
@@ -2073,11 +2075,19 @@ async function streamChatCompletion(args: {
         stream: true,
         messages: args.messages,
         temperature: args.temperature,
+        ...(typeof args.maxTokens === "number"
+          ? { max_tokens: args.maxTokens }
+          : {}),
         stream_options: {
           include_usage: true,
         },
         ...(typeof args.slotId === "number"
           ? { id_slot: args.slotId, cache_prompt: true }
+          : {}),
+        ...(args.responseFormat
+          ? {
+              response_format: args.responseFormat,
+            }
           : {}),
         ...(args.tools?.length
           ? {
@@ -2183,6 +2193,69 @@ async function streamChatCompletion(args: {
     model: resolvedModel,
     metrics: finalMetrics,
   }
+}
+
+async function createStreamingStructuredCompletion(args: {
+  baseUrl: string
+  apiKey?: string
+  model: string
+  messages: ProviderMessage[]
+  temperature: number
+  maxTokens: number
+  enableThinking?: boolean
+  slotId?: number
+  responseFormat: JsonSchemaResponseFormat
+  tools?: ProviderToolDefinition[]
+  toolChoice?: ProviderToolChoice
+  signal: AbortSignal
+}) {
+  let streamedText = ""
+
+  try {
+    const streamingResult = await streamChatCompletion({
+      baseUrl: args.baseUrl,
+      apiKey: args.apiKey,
+      model: args.model,
+      messages: args.messages,
+      temperature: args.temperature,
+      maxTokens: args.maxTokens,
+      enableThinking: args.enableThinking,
+      slotId: args.slotId,
+      responseFormat: args.responseFormat,
+      tools: args.tools,
+      toolChoice: args.toolChoice,
+      signal: args.signal,
+      onToken: (text) => {
+        streamedText += text
+      },
+      emitReasoningToOutput: false,
+    })
+
+    if (streamedText.trim()) {
+      return {
+        text: streamedText,
+        model: streamingResult.model,
+        metrics: streamingResult.metrics,
+      }
+    }
+  } catch {
+    // Fallback to non-stream structured completion below.
+  }
+
+  return await createChatCompletion({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    messages: args.messages,
+    temperature: args.temperature,
+    maxTokens: args.maxTokens,
+    enableThinking: args.enableThinking,
+    slotId: args.slotId,
+    responseFormat: args.responseFormat,
+    tools: args.tools,
+    toolChoice: args.toolChoice,
+    signal: args.signal,
+  })
 }
 
 function fallbackRoutingGate(message: string): RoutingGate {
@@ -2987,7 +3060,7 @@ async function createStructuredStepSummary(args: {
           phaseContext: summaryPromptContext,
         })
 
-  const completion = await createChatCompletion({
+  const completion = await createStreamingStructuredCompletion({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.modelId,
@@ -3232,7 +3305,7 @@ async function updateGlobalMemory(args: {
     ],
   })
 
-  const memoryCompletion = await createChatCompletion({
+  const memoryCompletion = await createStreamingStructuredCompletion({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.mode.majorModel,
