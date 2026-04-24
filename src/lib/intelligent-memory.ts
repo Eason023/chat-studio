@@ -4,7 +4,7 @@ import type {
 } from "@/lib/types"
 
 export const GLOBAL_MEMORY_ENTRY_LIMIT = 32
-export const GLOBAL_MEMORY_VALUE_CHAR_LIMIT = 420
+export const GLOBAL_MEMORY_VALUE_CHAR_LIMIT = 32768
 
 export function getIntelligentSessionMemoryKey(sessionId?: string | null) {
   if (!sessionId) {

@@ -173,12 +173,12 @@ const EXECUTION_TEMPERATURE = 0.3
 const GATE_MAX_TOKENS = 180
 const ANALYSIS_MAX_TOKENS = 520
 const PLANNER_MAX_TOKENS = 1400
-const STEP_MAX_TOKENS = 8192
-const STEP_SUMMARY_MAX_TOKENS = 4096
-const GLOBAL_MEMORY_MAX_TOKENS = 420
-const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 8000
+const STEP_MAX_TOKENS = 32768
+const STEP_SUMMARY_MAX_TOKENS = 32768
+const GLOBAL_MEMORY_MAX_TOKENS = 32768
+const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 32768
 const MULTI_STEP_THRESHOLD = 64
-const SESSION_CAPSULE_CHAR_LIMIT = 1400
+const SESSION_CAPSULE_CHAR_LIMIT = 32768
 const MAX_STEP_TOOL_CALLS = 4
 const USER_FEATURE_MEMORY_LIMIT = 12
 const INSTRUCTION_MEMORY_LIMIT = 12
@@ -810,7 +810,10 @@ function buildStepSummaryContext(args: {
             (toolUse, index) =>
               `${index + 1}. ${toolUse.toolName} (${toolUse.isError ? "error" : "success"})\nArguments: ${JSON.stringify(
                 toolUse.toolArguments
-              )}\nResult:\n${truncateContextBlock(toolUse.resultText, 900)}`
+              )}\nResult:\n${truncateContextBlock(
+                toolUse.resultText,
+                TOOL_RESULT_CONVERSATION_CHAR_LIMIT
+              )}`
           )
           .join("\n\n")}`
       : "No MCP tools were used in this step.",
@@ -2443,7 +2446,7 @@ function normalizePhaseDetail(text: string) {
   return text.trim()
 }
 
-function truncateContextBlock(text: string, maxLength = 2200) {
+function truncateContextBlock(text: string, maxLength = 32768) {
   const normalized = text.trim()
   if (!normalized) {
     return ""
