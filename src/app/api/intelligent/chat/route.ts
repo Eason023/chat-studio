@@ -177,7 +177,6 @@ const STEP_MAX_TOKENS = 32768
 const STEP_SUMMARY_MAX_TOKENS = 32768
 const GLOBAL_MEMORY_MAX_TOKENS = 32768
 const TOOL_RESULT_CONVERSATION_CHAR_LIMIT = 32768
-const MULTI_STEP_THRESHOLD = 64
 const SESSION_CAPSULE_CHAR_LIMIT = 32768
 const MAX_STEP_TOOL_CALLS = 4
 const USER_FEATURE_MEMORY_LIMIT = 12
@@ -2259,38 +2258,85 @@ async function createStreamingStructuredCompletion(args: {
   })
 }
 
-function fallbackRoutingGate(message: string): RoutingGate {
-  const heuristic = fallbackProblemAnalysis(message)
-  const shouldUseInstant =
-    heuristic.difficultyScore < MULTI_STEP_THRESHOLD &&
-    heuristic.recommendedStepCount <= 2
+type StructuredCompletionPayload = {
+  text: string
+  model: string
+  metrics?: IntelligentPhaseMetrics
+}
 
-  return {
-    shouldUseInstant,
-    gateSummary: shouldUseInstant
-      ? "This request appears simple enough for a direct answer."
-      : "This request likely needs deeper planning instead of an immediate answer.",
+async function resolveStructuredPhaseWithRetry<T>(args: {
+  label: string
+  run: (attempt: number) => Promise<StructuredCompletionPayload>
+  parse: (text: string) => T | null
+  signal: AbortSignal
+}) {
+  let lastError: unknown = null
+  let lastText = ""
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    if (args.signal.aborted) {
+      throw new Error(`${args.label} was aborted before completion.`)
+    }
+
+    try {
+      const completion = await args.run(attempt)
+      lastText = completion.text
+
+      const parsed = args.parse(completion.text)
+      if (parsed !== null) {
+        return {
+          value: parsed,
+          completion,
+          attempts: attempt,
+        }
+      }
+
+      lastError = new Error(
+        `${args.label} returned an invalid structured payload on attempt ${attempt}.`
+      )
+    } catch (error) {
+      lastError = error
+
+      if (isAbortError(error)) {
+        throw error
+      }
+    }
   }
+
+  const preview = lastText.replace(/\s+/g, " ").trim()
+  const previewDetail = preview
+    ? ` Raw response preview: ${preview.slice(0, 280)}${
+        preview.length > 280 ? "..." : ""
+      }`
+    : ""
+  const baseMessage =
+    lastError instanceof Error
+      ? lastError.message
+      : `${args.label} failed to produce a valid structured response.`
+
+  throw new Error(`${baseMessage}${previewDetail}`)
 }
 
 function normalizeGateSummary(summary: string) {
   return summary.replace(/\s+/g, " ").trim()
 }
 
-function parseRoutingGate(text: string, message: string): RoutingGate {
+function tryParseRoutingGate(text: string): RoutingGate | null {
   const parsed = tryParseStructuredText(text)
 
-  if (!isRecord(parsed)) {
-    return fallbackRoutingGate(message)
+  if (!isRecord(parsed) || typeof parsed.shouldUseInstant !== "boolean") {
+    return null
   }
 
   return {
-    shouldUseInstant:
-      typeof parsed.shouldUseInstant === "boolean"
-        ? parsed.shouldUseInstant
-        : fallbackRoutingGate(message).shouldUseInstant,
+    shouldUseInstant: parsed.shouldUseInstant,
     gateSummary: normalizeGateSummary(
-      asString(parsed.gateSummary, fallbackRoutingGate(message).gateSummary)
+      asString(
+        parsed.gateSummary,
+        parsed.shouldUseInstant
+          ? "This request can be answered directly."
+          : "This request requires multi-step work."
+      )
     ),
   }
 }
@@ -2320,11 +2366,11 @@ function fallbackProblemAnalysis(message: string): ProblemAnalysis {
   }
 }
 
-function parseProblemAnalysis(text: string, message: string): ProblemAnalysis {
+function tryParseProblemAnalysis(text: string): ProblemAnalysis | null {
   const parsed = tryParseStructuredText(text)
 
   if (!isRecord(parsed)) {
-    return fallbackProblemAnalysis(message)
+    return null
   }
   const groundingNeed = normalizeGroundingNeed(parsed.groundingNeed, "medium")
   const complexityFactors = normalizeStringArray(parsed.complexityFactors, 6, [])
@@ -2350,58 +2396,11 @@ function decideRoute(gate: RoutingGate) {
   return gate.shouldUseInstant ? ("instant" as const) : ("multi-step" as const)
 }
 
-function fallbackPlan(message: string, analysis: ProblemAnalysis): PlannedStep[] {
-  return [
-    {
-      id: "step-1",
-      title: "Clarify the task",
-      objective: `Identify the core request and relevant constraints from: ${message.slice(
-        0,
-        160
-      )}`,
-      difficultyScore: Math.max(35, analysis.difficultyScore - 10),
-      needsFullContext: false,
-      groundingNeed: analysis.groundingNeed,
-    },
-    {
-      id: "step-2",
-      title: "Collect or verify the key evidence",
-      objective:
-        "Gather the information, evidence, or tool-backed findings required before the main conclusion can be trusted.",
-      difficultyScore: Math.max(40, analysis.difficultyScore - 2),
-      needsFullContext: false,
-      groundingNeed: analysis.groundingNeed,
-    },
-    {
-      id: "step-3",
-      title: "Do the main reasoning",
-      objective:
-        "Analyze the gathered material and develop the core reasoning or solution approach.",
-      difficultyScore: analysis.difficultyScore,
-      needsFullContext: false,
-      groundingNeed: analysis.groundingNeed,
-    },
-    {
-      id: "step-4",
-      title: "Cross-check important constraints",
-      objective:
-        "Review edge cases, conflicts, and constraints that could change the final answer.",
-      difficultyScore: Math.max(42, analysis.difficultyScore - 8),
-      needsFullContext: false,
-      groundingNeed: analysis.groundingNeed,
-    },
-  ].slice(0, Math.max(2, Math.min(4, analysis.recommendedStepCount)))
-}
-
-function parsePlan(
-  text: string,
-  message: string,
-  analysis: ProblemAnalysis
-): PlannedStep[] {
+function tryParsePlan(text: string, analysis: ProblemAnalysis): PlannedStep[] | null {
   const parsed = tryParseStructuredText(text)
 
   if (!isRecord(parsed) || !Array.isArray(parsed.steps)) {
-    return fallbackPlan(message, analysis)
+    return null
   }
 
   const steps = parsed.steps
@@ -2439,7 +2438,7 @@ function parsePlan(
     .filter((step): step is PlannedStep => Boolean(step))
     .slice(0, 10)
 
-  return steps.length >= 2 ? steps : fallbackPlan(message, analysis)
+  return steps.length >= 2 ? steps : null
 }
 
 function normalizePhaseDetail(text: string) {
@@ -3902,26 +3901,50 @@ export async function POST(request: Request) {
           },
         })
 
-        const routingGateCompletion = await createStructuredRoutingGateCompletion({
-          baseUrl,
-          apiKey,
-          mode,
-          history: body.history,
-          latestUserSummary: message,
-          latestUserContentText,
-          globalMemory,
-          sessionSummary,
-          tools: availableMcpTools,
-          currentSessionKey,
-          model: mode.majorModel,
-          maxTokens: GATE_MAX_TOKENS,
-          enableThinking: false,
-          slotId: majorContextualSlotId,
-          timeContext: requestTimeContext,
+        const routingGateResult = await resolveStructuredPhaseWithRetry({
+          label: "Routing gate",
+          run: async () =>
+            await createStructuredRoutingGateCompletion({
+              baseUrl,
+              apiKey,
+              mode,
+              history: body.history,
+              latestUserSummary: message,
+              latestUserContentText,
+              globalMemory,
+              sessionSummary,
+              tools: availableMcpTools,
+              currentSessionKey,
+              model: mode.majorModel,
+              maxTokens: GATE_MAX_TOKENS,
+              enableThinking: false,
+              slotId: majorContextualSlotId,
+              timeContext: requestTimeContext,
+              signal: request.signal,
+            }),
+          parse: tryParseRoutingGate,
           signal: request.signal,
+        }).catch((error) => {
+          send({
+            type: "phase",
+            phase: {
+              id: "analysis",
+              label: "Check user intent",
+              status: "error",
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : "Routing gate failed to produce a valid structured response.",
+              modelId: mode.majorModel,
+              lane: "contextual",
+              reasoningMode: routingReasoningMode,
+            },
+          })
+          throw error
         })
 
-        const routingGate = parseRoutingGate(routingGateCompletion.text, message)
+        const routingGate = routingGateResult.value
+        const routingGateCompletion = routingGateResult.completion
         const route = decideRoute(routingGate)
 
         send({
@@ -3985,26 +4008,50 @@ export async function POST(request: Request) {
           },
         })
 
-        const analysisCompletion = await createStructuredAnalysisCompletion({
-          baseUrl,
-          apiKey,
-          mode,
-          history: body.history,
-          latestUserSummary: message,
-          latestUserContentText,
-          globalMemory,
-          sessionSummary,
-          tools: availableMcpTools,
-          currentSessionKey,
-          model: mode.majorModel,
-          maxTokens: ANALYSIS_MAX_TOKENS,
-          enableThinking: analysisReasoningMode === "think",
-          slotId: majorContextualSlotId,
-          timeContext: requestTimeContext,
+        const analysisResult = await resolveStructuredPhaseWithRetry({
+          label: "Problem analysis",
+          run: async () =>
+            await createStructuredAnalysisCompletion({
+              baseUrl,
+              apiKey,
+              mode,
+              history: body.history,
+              latestUserSummary: message,
+              latestUserContentText,
+              globalMemory,
+              sessionSummary,
+              tools: availableMcpTools,
+              currentSessionKey,
+              model: mode.majorModel,
+              maxTokens: ANALYSIS_MAX_TOKENS,
+              enableThinking: analysisReasoningMode === "think",
+              slotId: majorContextualSlotId,
+              timeContext: requestTimeContext,
+              signal: request.signal,
+            }),
+          parse: tryParseProblemAnalysis,
           signal: request.signal,
+        }).catch((error) => {
+          send({
+            type: "phase",
+            phase: {
+              id: "problem-analysis",
+              label: "Planning solutions",
+              status: "error",
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : "Problem analysis failed to produce a valid structured response.",
+              modelId: mode.majorModel,
+              lane: "contextual",
+              reasoningMode: analysisReasoningMode,
+            },
+          })
+          throw error
         })
 
-        const analysis = parseProblemAnalysis(analysisCompletion.text, message)
+        const analysis = analysisResult.value
+        const analysisCompletion = analysisResult.completion
 
         send({
           type: "phase",
@@ -4048,27 +4095,51 @@ export async function POST(request: Request) {
           },
         })
 
-        const plannerCompletion = await createStructuredPlannerCompletion({
-          baseUrl,
-          apiKey,
-          mode,
-          history: body.history,
-          analysis,
-          latestUserSummary: message,
-          latestUserContentText,
-          globalMemory,
-          sessionSummary,
-          tools: availableMcpTools,
-          currentSessionKey,
-          model: mode.majorModel,
-          maxTokens: PLANNER_MAX_TOKENS,
-          enableThinking: plannerReasoningMode === "think",
-          slotId: majorContextualSlotId,
-          timeContext: requestTimeContext,
+        const plannerResult = await resolveStructuredPhaseWithRetry({
+          label: "Step planner",
+          run: async () =>
+            await createStructuredPlannerCompletion({
+              baseUrl,
+              apiKey,
+              mode,
+              history: body.history,
+              analysis,
+              latestUserSummary: message,
+              latestUserContentText,
+              globalMemory,
+              sessionSummary,
+              tools: availableMcpTools,
+              currentSessionKey,
+              model: mode.majorModel,
+              maxTokens: PLANNER_MAX_TOKENS,
+              enableThinking: plannerReasoningMode === "think",
+              slotId: majorContextualSlotId,
+              timeContext: requestTimeContext,
+              signal: request.signal,
+            }),
+          parse: (text) => tryParsePlan(text, analysis),
           signal: request.signal,
+        }).catch((error) => {
+          send({
+            type: "phase",
+            phase: {
+              id: "planner",
+              label: "Planning steps",
+              status: "error",
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : "Planner failed to produce a valid structured response.",
+              modelId: mode.majorModel,
+              lane: "contextual",
+              reasoningMode: plannerReasoningMode,
+            },
+          })
+          throw error
         })
 
-        const plannedSteps = parsePlan(plannerCompletion.text, message, analysis)
+        const plannedSteps = plannerResult.value
+        const plannerCompletion = plannerResult.completion
 
         send({
           type: "phase",
