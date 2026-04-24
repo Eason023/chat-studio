@@ -3,7 +3,7 @@
 ![Chat Studio Preview](./media/Chat-Studio.png)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE) ![GitHub release](https://img.shields.io/github/v/release/eason023/chat-studio) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
-Chat Studio is a next-generation chat workspace that brings server-side AI orchestration and cross-session memory to OpenAI-compatible backends.
+Chat Studio is a chat workspace for server-side AI orchestration, cross-session memory, and traceable multi-step workflows, built to work especially well with [`llama.cpp`](https://github.com/ggml-org/llama.cpp) server.
 
 It combines a conventional manually controlled chat UI with a session-oriented intelligent workflow, so you can keep a familiar chat experience while adding server-side routing, structured multi-step execution, and traceable orchestration.
 
