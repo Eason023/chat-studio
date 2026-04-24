@@ -1992,7 +1992,6 @@ async function createChatCompletion(args: {
         model: args.model,
         stream: false,
         messages: args.messages,
-        temperature: args.temperature,
         max_tokens: args.maxTokens,
         ...(typeof args.slotId === "number"
           ? { id_slot: args.slotId, cache_prompt: true }
@@ -2074,7 +2073,6 @@ async function streamChatCompletion(args: {
         model: args.model,
         stream: true,
         messages: args.messages,
-        temperature: args.temperature,
         ...(typeof args.maxTokens === "number"
           ? { max_tokens: args.maxTokens }
           : {}),
